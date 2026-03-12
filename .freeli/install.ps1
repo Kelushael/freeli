@@ -1,36 +1,52 @@
 $ErrorActionPreference = "Stop"
-$UserDir = $env:USERPROFILE
-$FreeliDir = "$UserDir\.freeli"
-$BinDir = "$FreeliDir\bin"
 
-Write-Host "Installing Freeli..." -ForegroundColor Cyan
+$RepoBase = "https://raw.githubusercontent.com/Kelushael/freeli/master"
+$InstallDir = "$env:USERPROFILE\.freeli"
+$BinDir = "$InstallDir\bin"
 
-# Create Dirs
-New-Item -ItemType Directory -Force -Path $FreeliDir | Out-Null
-New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+Write-Host "--- Installing Freeli (Windows) ---" -ForegroundColor Cyan
 
-$Repo = "https://raw.githubusercontent.com/Kelushael/free-li/master"
-
-# Download Source
-Write-Host "Downloading core files..."
-try {
-    Invoke-WebRequest -Uri "$Repo/freeli.py" -OutFile "$FreeliDir\freeli.py"
-} catch {
-    Write-Error "Failed to download freeli.py. Check internet connection."
+# 1. Check Python
+if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
+    Write-Host "Python not found! Please install Python 3.10+ from python.org" -ForegroundColor Red
     exit 1
 }
 
-# Create Wrapper
-$BatContent = "@echo off`npython ""$FreeliDir\freeli.py"" %*"
-Set-Content -Path "$BinDir\freeli.cmd" -Value $BatContent
+# 2. Setup Dirs
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
-# Add to Path
+# 3. Download Source
+Write-Host "Downloading core files..."
+try {
+    Invoke-WebRequest -Uri "$RepoBase/.freeli/freeli.py" -OutFile "$InstallDir\freeli.py"
+    Invoke-WebRequest -Uri "$RepoBase/gguf_wrapper.py" -OutFile "$InstallDir\gguf_wrapper.py"
+} catch {
+    Write-Error "Download failed. Check internet connection."
+    exit 1
+}
+
+# 4. Install Libs
+Write-Host "Installing Python libraries..."
+pip install requests prompt_toolkit colorama rich httpx
+
+# 5. Create Wrapper (freeli.cmd)
+$CmdContent = "@echo off`npython ""$InstallDir\freeli.py"" %*"
+Set-Content -Path "$BinDir\freeli.cmd" -Value $CmdContent
+
+# 6. Create Wrapper (freeli.ps1 for PowerShell native execution)
+$PsContent = "python `"$InstallDir\freeli.py`" `$args"
+Set-Content -Path "$BinDir\freeli.ps1" -Value $PsContent
+
+# 7. Add to Path
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$BinDir*") {
     Write-Host "Adding $BinDir to PATH..."
     [Environment]::SetEnvironmentVariable("Path", "$UserPath;$BinDir", "User")
-    Write-Host "NOTE: You may need to restart your terminal for PATH changes to take effect." -ForegroundColor Yellow
+    Write-Host "NOTE: Please restart your terminal for PATH changes to take effect." -ForegroundColor Yellow
 }
 
-Write-Host "`n[SUCCESS] Freeli installed!" -ForegroundColor Green
+Write-Host "`n------------------------------------------------"
+Write-Host "[SUCCESS] Freeli installed!" -ForegroundColor Green
 Write-Host "Type 'freeli' to start."
+Write-Host "------------------------------------------------"
