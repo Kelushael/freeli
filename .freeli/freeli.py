@@ -572,7 +572,8 @@ class Freeli:
 
     
     def _get_system_prompt(self):
-        base = self.config.get("system_prompt", AGENT_SYSTEM_PROMPT)
+        # Concise prompt for smaller models
+        base = "You are Freeli, a sovereign AI agent. Use tools via XML: <tool name=\"cmd\">...</tool>. Be direct."
         mem_path = WORKSPACE / "memory.txt"
         if mem_path.exists():
             mem = mem_path.read_text(encoding="utf-8").strip()
