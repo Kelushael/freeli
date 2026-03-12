@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FreeAide - Sovereign IDE</title>
+    <style>
+        :root { --bg: #1e1e1e; --fg: #d4d4d4; --sidebar: #252526; --accent: #007acc; }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--fg); height: 100vh; display: flex; overflow: hidden; }
+        
+        #sidebar { width: 250px; background: var(--sidebar); display: flex; flex-direction: column; border-right: 1px solid #333; }
+        #files { flex: 1; overflow-y: auto; padding: 10px; }
+        .file-item { padding: 4px 8px; cursor: pointer; display: flex; align-items: center; font-size: 13px; }
+        .file-item:hover { background: #2a2d2e; }
+        .file-item.dir { font-weight: bold; color: #ccc; }
+        .file-item.file { color: #d4d4d4; }
+        
+        #main { flex: 1; display: flex; flex-direction: column; }
+        #tabs { height: 35px; background: #2d2d2d; display: flex; align-items: center; overflow-x: auto; }
+        .tab { padding: 8px 15px; background: #2d2d2d; border-right: 1px solid #333; font-size: 13px; cursor: pointer; display: flex; align-items: center; }
+        .tab.active { background: #1e1e1e; border-top: 2px solid var(--accent); }
+        .tab-close { margin-left: 8px; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+        .tab-close:hover { background: #444; }
+        
+        #editor-container { flex: 1; position: relative; }
+        
+        #panel { height: 200px; background: #1e1e1e; border-top: 1px solid #333; display: flex; flex-direction: column; }
+        #panel-header { padding: 5px 10px; background: #252526; display: flex; gap: 10px; font-size: 12px; text-transform: uppercase; }
+        #panel-content { flex: 1; display: flex; }
+        #terminal { flex: 1; padding: 10px; font-family: 'Consolas', monospace; overflow-y: auto; white-space: pre-wrap; font-size: 12px; }
+        #chat { width: 300px; border-left: 1px solid #333; display: flex; flex-direction: column; }
+        #chat-messages { flex: 1; padding: 10px; overflow-y: auto; font-size: 13px; }
+        #chat-input { padding: 10px; background: #252526; border: none; color: white; border-top: 1px solid #333; outline: none; }
+        
+        .msg-user { color: #ce9178; margin-bottom: 8px; }
+        .msg-ai { color: #9cdcfe; margin-bottom: 8px; }
+        
+        /* Icons */
+        .icon { width: 16px; height: 16px; margin-right: 5px; display: inline-block; }
+    </style>
+    <!-- Load Monaco Editor -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+</head>
+<body>
+
+<div id="sidebar">
+    <div style="padding: 10px; font-weight: bold; font-size: 11px; color: #888;">EXPLORER</div>
+    <div id="files"></div>
+</div>
+
+<div id="main">
+    <div id="tabs"></div>
+    <div id="editor-container"></div>
+    <div id="panel">
+        <div id="panel-header">
+            <span style="cursor:pointer" onclick="showPanel('terminal')">Terminal</span>
+            <span style="cursor:pointer" onclick="showPanel('chat')">AI Chat</span>
+        </div>
+        <div id="panel-content">
+            <div id="terminal">Welcome to FreeAide Terminal.
+> _</div>
+            <div id="chat" style="display:none">
+                <div id="chat-messages">
+                    <div class="msg-ai">Hello! I'm FreeAide. How can I help you code today?</div>
+                </div>
+                <input id="chat-input" placeholder="Ask Freeli..." onkeydown="handleChat(event)">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let editor;
+    let currentPath = "";
+    
+    // Initialize Monaco
+    require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }});
+    require(['vs/editor/editor.main'], function() {
+        editor = monaco.editor.create(document.getElementById('editor-container'), {
+            value: "// Select a file to edit",
+            language: 'python',
+            theme: 'vs-dark',
+            automaticLayout: true
+        });
+        
+        // Ctrl+S to save
+        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+            if (currentPath) saveFile(currentPath, editor.getValue());
+        });
+        
+        loadFileTree(".");
+    });
+
+    // File Tree
+    async function loadFileTree(path) {
+        const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
+        const files = await res.json();
+        const container = document.getElementById('files');
+        container.innerHTML = "";
+        
+        if (path !== ".") {
+            const up = document.createElement('div');
+            up.className = 'file-item dir';
+            up.textContent = "..";
+            up.onclick = () => loadFileTree(path.split("/").slice(0, -1).join("/") || ".");
+            container.appendChild(up);
+        }
+        
+        files.forEach(f => {
+            const div = document.createElement('div');
+            div.className = `file-item ${f.is_dir ? 'dir' : 'file'}`;
+            div.textContent = (f.is_dir ? "📁 " : "📄 ") + f.name;
+            div.onclick = () => {
+                if (f.is_dir) loadFileTree(f.path);
+                else openFile(f.path);
+            };
+            container.appendChild(div);
+        });
+    }
+
+    // File Operations
+    async function openFile(path) {
+        const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        
+        currentPath = path;
+        
+        // Determine language
+        const ext = path.split('.').pop();
+        let lang = 'plaintext';
+        if (ext === 'py') lang = 'python';
+        if (ext === 'js') lang = 'javascript';
+        if (ext === 'html') lang = 'html';
+        if (ext === 'css') lang = 'css';
+        if (ext === 'json') lang = 'json';
+        if (ext === 'md') lang = 'markdown';
+        
+        monaco.editor.setModelLanguage(editor.getModel(), lang);
+        editor.setValue(data.content);
+        
+        // Update tabs (simplified)
+        const tabs = document.getElementById('tabs');
+        tabs.innerHTML = `<div class="tab active"><span>${path}</span></div>`;
+    }
+
+    async function saveFile(path, content) {
+        await fetch('/api/file', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path, content})
+        });
+        alert("Saved!");
+    }
+
+    // Panel Logic
+    function showPanel(id) {
+        document.getElementById('terminal').style.display = id === 'terminal' ? 'block' : 'none';
+        document.getElementById('chat').style.display = id === 'chat' ? 'flex' : 'none';
+    }
+
+    // Chat Logic
+    async function handleChat(e) {
+        if (e.key === 'Enter') {
+            const input = document.getElementById('chat-input');
+            const msg = input.value;
+            if (!msg) return;
+            
+            input.value = "";
+            const box = document.getElementById('chat-messages');
+            box.innerHTML += `<div class="msg-user">${msg}</div>`;
+            box.scrollTop = box.scrollHeight;
+            
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: msg})
+            });
+            const data = await res.json();
+            
+            box.innerHTML += `<div class="msg-ai">${data.response || "Error"}</div>`;
+            box.scrollTop = box.scrollHeight;
+        }
+    }
+    
+    // Simple Terminal execution
+    // (In a real app, this would be a WebSocket xterm.js implementation)
+    // For now, let's just allow running commands via an input
+</script>
+</body>
+</html>

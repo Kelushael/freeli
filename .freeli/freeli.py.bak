@@ -1,0 +1,568 @@
+#!/usr/bin/env python3
+"""
+FREELI - Sovereign Local AI Runtime
+Axis Mundi Stack - Full Agentic Version
+"""
+
+import json
+import os
+import sys
+import subprocess
+import argparse
+import socket
+import time
+import urllib.request
+import urllib.error
+import webbrowser
+import http.server
+import threading
+import re
+from pathlib import Path
+from datetime import datetime
+
+# PATHS
+FREELI_HOME = Path.home() / ".freeli"
+CONFIG_PATH = FREELI_HOME / "config" / "config.json"
+BIN_DIR = FREELI_HOME / "bin"
+MODELS_DIR = Path.home() / "models"
+WORKSPACE = FREELI_HOME / "workspace"
+ARTIFACTS = FREELI_HOME / "artifacts"
+
+# Ensure dirs exist
+WORKSPACE.mkdir(parents=True, exist_ok=True)
+ARTIFACTS.mkdir(parents=True, exist_ok=True)
+
+# Executables
+if sys.platform == "win32":
+    LLAMA_SERVER = BIN_DIR / "llama-server.exe"
+    LLAMA_CLI = BIN_DIR / "llama-cli.exe"
+else:
+    LLAMA_SERVER = BIN_DIR / "llama-server"
+    LLAMA_CLI = BIN_DIR / "llama-cli"
+
+
+def find_models():
+    models = []
+    for path in [MODELS_DIR, FREELI_HOME / "models", Path.home() / "Downloads"]:
+        if path.exists():
+            models.extend(path.glob("*.gguf"))
+    return sorted(models, key=lambda x: x.stat().st_size, reverse=True)
+
+def is_port_open(host, port, timeout=2):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except:
+        return False
+
+# ═══════════════════════════════════════════════════════════════
+# TOOLS - The model can use these
+# ═══════════════════════════════════════════════════════════════
+
+class Tools:
+    @staticmethod
+    def execute_code(code: str, lang: str = "python") -> str:
+        """Execute code and return output."""
+        try:
+            if lang == "python":
+                result = subprocess.run([sys.executable, "-c", code], 
+                    capture_output=True, text=True, timeout=60, cwd=str(WORKSPACE))
+            elif lang in ["powershell", "ps1"]:
+                result = subprocess.run(["powershell", "-Command", code],
+                    capture_output=True, text=True, timeout=60, cwd=str(WORKSPACE))
+            elif lang in ["cmd", "batch"]:
+                result = subprocess.run(["cmd", "/c", code],
+                    capture_output=True, text=True, timeout=60, cwd=str(WORKSPACE))
+            elif lang == "node":
+                result = subprocess.run(["node", "-e", code],
+                    capture_output=True, text=True, timeout=60, cwd=str(WORKSPACE))
+            else:
+                return f"[ERROR] Unknown language: {lang}"
+            
+            out = result.stdout.strip()
+            if result.stderr:
+                out += f"\n[STDERR] {result.stderr.strip()}"
+            return out or "[No output]"
+        except subprocess.TimeoutExpired:
+            return "[ERROR] Execution timed out (60s)"
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+    
+    @staticmethod
+    def write_file(path: str, content: str) -> str:
+        """Write content to file."""
+        try:
+            p = Path(path)
+            if not p.is_absolute():
+                p = WORKSPACE / path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding='utf-8')
+            return f"[OK] Written to {p}"
+        except Exception as e:
+            return f"[ERROR] {e}"
+    
+    @staticmethod
+    def read_file(path: str) -> str:
+        """Read file content."""
+        try:
+            p = Path(path)
+            if not p.is_absolute():
+                p = WORKSPACE / path
+            return p.read_text(encoding='utf-8')
+        except Exception as e:
+            return f"[ERROR] {e}"
+    
+    @staticmethod
+    def list_dir(path: str = ".") -> str:
+        """List directory contents."""
+        try:
+            p = Path(path)
+            if not p.is_absolute():
+                p = WORKSPACE / path
+            items = list(p.iterdir())
+            return "\n".join(f"{'[DIR]' if i.is_dir() else '[FILE]'} {i.name}" for i in items)
+        except Exception as e:
+            return f"[ERROR] {e}"
+    
+    @staticmethod
+    def web_search(query: str) -> str:
+        """Search the web using DuckDuckGo."""
+        try:
+            q = urllib.parse.quote(query)
+            url = f"https://html.duckduckgo.com/html/?q={q}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                html = resp.read().decode('utf-8')
+            # Parse results
+            results = []
+            for m in re.finditer(r'<a class="result__a" href="([^"]+)"[^>]*>([^<]+)</a>', html):
+                results.append(f"• {m.group(2)}: {m.group(1)}")
+                if len(results) >= 5:
+                    break
+            return "\n".join(results) if results else "[No results]"
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+    
+    @staticmethod
+    def create_artifact(name: str, html_content: str, auto_open: bool = True) -> str:
+        """Create an HTML artifact and optionally open in browser."""
+        try:
+            if not name.endswith('.html'):
+                name += '.html'
+            path = ARTIFACTS / name
+            path.write_text(html_content, encoding='utf-8')
+            
+            if auto_open:
+                webbrowser.open(f'file://{path}')
+            return f"[OK] Artifact created: {path}"
+        except Exception as e:
+            return f"[ERROR] {e}"
+    
+    @staticmethod
+    def serve_artifacts(port: int = 8888) -> str:
+        """Start a local web server for artifacts."""
+        if is_port_open("localhost", port):
+            return f"[OK] Server already running on http://localhost:{port}"
+        
+        def run_server():
+            os.chdir(str(ARTIFACTS))
+            handler = http.server.SimpleHTTPRequestHandler
+            with socketserver.TCPServer(("", port), handler) as httpd:
+                httpd.serve_forever()
+        
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
+        time.sleep(0.5)
+        return f"[OK] Artifact server running at http://localhost:{port}"
+    
+    @staticmethod
+    def screenshot() -> str:
+        """Take a screenshot (requires pillow)."""
+        try:
+            from PIL import ImageGrab
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = WORKSPACE / f"screenshot_{ts}.png"
+            img = ImageGrab.grab()
+            img.save(path)
+            return f"[OK] Screenshot saved: {path}"
+        except ImportError:
+            return "[ERROR] Install pillow: pip install pillow"
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+
+import socketserver
+import urllib.parse
+
+# ═══════════════════════════════════════════════════════════════
+# CONFIG
+# ═══════════════════════════════════════════════════════════════
+
+class Config:
+    def __init__(self):
+        self.path = CONFIG_PATH
+        self.data = self._load()
+    
+    def _load(self):
+        if self.path.exists():
+            try:
+                return json.load(open(self.path, encoding='utf-8'))
+            except: pass
+        return self._defaults()
+    
+    def _defaults(self):
+        models = find_models()
+        return {
+            "version": "0.1.0",
+            "model": {"path": str(models[0]) if models else "", "context_length": 4096, "threads": 8},
+            "api": {"host": "0.0.0.0", "port": 8125},
+            "remote": {"enabled": True, "url": "http://187.77.208.28:8125"},
+            "tools": {
+                "code_execution": True,
+                "file_access": True,
+                "web_search": True,
+                "artifacts": True,
+                "screenshot": True
+            },
+            "system_prompt": AGENT_SYSTEM_PROMPT,
+            "inference": {"temperature": 0.7, "max_tokens": 4096}
+        }
+    
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        json.dump(self.data, open(self.path, 'w', encoding='utf-8'), indent=2)
+    
+    def get(self, key, default=None):
+        keys = key.split('.')
+        val = self.data
+        for k in keys:
+            if isinstance(val, dict): val = val.get(k, default)
+            else: return default
+        return val
+
+
+# ═══════════════════════════════════════════════════════════════
+# AGENT SYSTEM PROMPT
+# ═══════════════════════════════════════════════════════════════
+
+AGENT_SYSTEM_PROMPT = """You are Freeli, a sovereign AI agent running on Axis Mundi.
+You have access to these tools. To use them, output XML tags:
+
+<tool name="execute">
+lang: python
+---
+print("Hello World")
+</tool>
+
+<tool name="write_file">
+path: app.html
+---
+<!DOCTYPE html>
+<html>...</html>
+</tool>
+
+<tool name="read_file">myfile.txt</tool>
+
+<tool name="list_dir">.</tool>
+
+<tool name="web_search">latest AI news</tool>
+
+<tool name="artifact">
+name: my_app.html
+---
+<!DOCTYPE html>
+<html>
+<head><title>My App</title></head>
+<body>
+<h1>Hello!</h1>
+<script>console.log("Running!")</script>
+</body>
+</html>
+</tool>
+
+<tool name="screenshot"></tool>
+
+When creating visual apps:
+1. Use <tool name="artifact"> to create HTML/JS apps
+2. They auto-open in browser
+3. Include all CSS/JS inline
+
+Be helpful, direct, and take action. Don't just describe - DO."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# FREELI AGENT
+# ═══════════════════════════════════════════════════════════════
+
+class Freeli:
+    def __init__(self):
+        self.config = Config()
+        self.tools = Tools()
+    
+    def get_model(self):
+        path = self.config.get("model.path") or self.config.get("model")
+        if path and Path(path).exists():
+            return str(path)
+        models = find_models()
+        return str(models[0]) if models else None
+    
+    def parse_tool_calls(self, text: str) -> list:
+        """Parse <tool> tags from model output."""
+        calls = []
+        pattern = r'<tool name="(\w+)">(.*?)</tool>'
+        for m in re.finditer(pattern, text, re.DOTALL):
+            calls.append((m.group(1), m.group(2).strip()))
+        return calls
+    
+    def execute_tool(self, name: str, content: str) -> str:
+        """Execute a tool call."""
+        if name == "execute":
+            lines = content.split("\n")
+            lang = "python"
+            code_start = 0
+            for i, line in enumerate(lines):
+                if line.startswith("lang:"):
+                    lang = line.split(":", 1)[1].strip()
+                if line.strip() == "---":
+                    code_start = i + 1
+                    break
+            code = "\n".join(lines[code_start:])
+            return self.tools.execute_code(code, lang)
+        
+        elif name == "write_file":
+            lines = content.split("\n")
+            path = ""
+            content_start = 0
+            for i, line in enumerate(lines):
+                if line.startswith("path:"):
+                    path = line.split(":", 1)[1].strip()
+                if line.strip() == "---":
+                    content_start = i + 1
+                    break
+            file_content = "\n".join(lines[content_start:])
+            return self.tools.write_file(path, file_content)
+        
+        elif name == "read_file":
+            return self.tools.read_file(content)
+        
+        elif name == "list_dir":
+            return self.tools.list_dir(content or ".")
+        
+        elif name == "web_search":
+            return self.tools.web_search(content)
+        
+        elif name == "artifact":
+            lines = content.split("\n")
+            name_val = "artifact.html"
+            html_start = 0
+            for i, line in enumerate(lines):
+                if line.startswith("name:"):
+                    name_val = line.split(":", 1)[1].strip()
+                if line.strip() == "---":
+                    html_start = i + 1
+                    break
+            html = "\n".join(lines[html_start:])
+            return self.tools.create_artifact(name_val, html)
+        
+        elif name == "screenshot":
+            return self.tools.screenshot()
+        
+        return f"[ERROR] Unknown tool: {name}"
+
+    
+    def chat_remote(self, message: str, url: str = None) -> str:
+        """Chat via remote API."""
+        url = url or self.config.get("remote.url", "http://187.77.208.28:8125")
+        system = self.config.get("system_prompt", AGENT_SYSTEM_PROMPT)
+        
+        data = json.dumps({
+            "model": "freeli",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": message}
+            ],
+            "max_tokens": self.config.get("inference.max_tokens", 4096),
+            "temperature": self.config.get("inference.temperature", 0.7)
+        }).encode('utf-8')
+        
+        req = urllib.request.Request(
+            f"{url}/v1/chat/completions",
+            data=data,
+            headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                # Handle different response formats
+                msg = result.get("choices", [{}])[0].get("message", {})
+                content = msg.get("content", "")
+                reasoning = msg.get("reasoning_content", "")
+                if reasoning and not content:
+                    return reasoning
+                return content or str(result)
+        except Exception as e:
+            return f"[ERROR] {e}"
+    
+    def chat_local(self, message: str) -> str:
+        """Chat via local llama-cli."""
+        model = self.get_model()
+        if not model:
+            return "[ERROR] No model found"
+        
+        system = self.config.get("system_prompt", AGENT_SYSTEM_PROMPT)
+        prompt = f"{system}\n\nUser: {message}\nAssistant:"
+        
+        cmd = [
+            str(LLAMA_CLI), "-m", model,
+            "-c", str(self.config.get("model.context_length", 4096)),
+            "-t", str(self.config.get("model.threads", 4)),
+            "-n", str(self.config.get("inference.max_tokens", 2048)),
+            "-p", prompt, "--no-display-prompt"
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            return result.stdout.strip() or result.stderr
+        except Exception as e:
+            return f"[ERROR] {e}"
+
+    
+    def agent_chat(self, message: str, use_remote: bool = True) -> str:
+        """Chat with tool execution loop."""
+        # Get response
+        if use_remote:
+            response = self.chat_remote(message)
+        else:
+            response = self.chat_local(message)
+        
+        # Parse and execute any tool calls
+        tool_calls = self.parse_tool_calls(response)
+        if tool_calls:
+            tool_outputs = []
+            for name, content in tool_calls:
+                print(f"  [TOOL] {name}...")
+                result = self.execute_tool(name, content)
+                tool_outputs.append(f"[{name}]: {result}")
+            
+            # Append tool results to response
+            response += "\n\n--- Tool Results ---\n" + "\n".join(tool_outputs)
+        
+        return response
+    
+    def serve(self):
+        """Start local llama-server."""
+        model = self.get_model()
+        if not model:
+            print("[freeli] ERROR: No model found")
+            return
+        
+        port = self.config.get("api.port", 8125)
+        host = self.config.get("api.host", "0.0.0.0")
+        
+        if is_port_open("localhost", port):
+            print(f"[freeli] Port {port} already in use")
+            return
+        
+        print(f"""
+╔═══════════════════════════════════════════════════════════════╗
+║   FREELI API SERVER                                          ║
+╠═══════════════════════════════════════════════════════════════╣
+║   Model: {Path(model).name[:50]:<50} ║
+║   API:   http://{host}:{port}/v1/chat/completions{' '*(26-len(str(port)))}║
+╚═══════════════════════════════════════════════════════════════╝
+""")
+        cmd = [str(LLAMA_SERVER), "-m", model, "-c", str(self.config.get("model.context_length", 4096)),
+               "-t", str(self.config.get("model.threads", 4)), "--host", host, "--port", str(port)]
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            print("\n[freeli] Stopped")
+
+    
+    def repl(self, use_remote: bool = True):
+        """Interactive agent REPL."""
+        model = self.get_model()
+        remote = self.config.get("remote.url", "http://187.77.208.28:8125")
+        mode = f"Remote: {remote}" if use_remote else f"Local: {Path(model).name if model else 'none'}"
+        
+        print(f"""
+╔═══════════════════════════════════════════════════════════════╗
+║   ███████╗██████╗ ███████╗███████╗██╗     ██╗                ║
+║   ██╔════╝██╔══██╗██╔════╝██╔════╝██║     ██║                ║
+║   █████╗  ██████╔╝█████╗  █████╗  ██║     ██║                ║
+║   ██╔══╝  ██╔══██╗██╔══╝  ██╔══╝  ██║     ██║                ║
+║   ██║     ██║  ██║███████╗███████╗███████╗██║                ║
+║   ╚═╝     ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚═╝                ║
+║   Sovereign AI Agent • Axis Mundi                            ║
+╚═══════════════════════════════════════════════════════════════╝
+   {mode}
+   Tools: code, files, web search, artifacts, screenshot
+   Commands: /remote /local /serve /config /models /quit
+""")
+        while True:
+            try:
+                user = input("\n[you] > ").strip()
+                if not user: continue
+                if user == "/quit": break
+                if user == "/config":
+                    print(json.dumps(self.config.data, indent=2))
+                    continue
+                if user == "/models":
+                    for m in find_models(): print(f"  • {m}")
+                    continue
+                if user == "/serve":
+                    self.serve()
+                    continue
+                if user == "/remote":
+                    use_remote = True
+                    print(f"[freeli] Remote mode: {remote}")
+                    continue
+                if user == "/local":
+                    use_remote = False
+                    print("[freeli] Local mode")
+                    continue
+                
+                print("\n[freeli] thinking...")
+                resp = self.agent_chat(user, use_remote)
+                print(f"\n[freeli] {resp}")
+            except KeyboardInterrupt:
+                print("\n/quit to exit")
+            except EOFError:
+                break
+
+
+
+def main():
+    p = argparse.ArgumentParser(description="Freeli - Sovereign AI Agent")
+    p.add_argument("cmd", nargs="?", default="repl", choices=["repl", "serve", "chat", "config", "models"])
+    p.add_argument("-m", "--message")
+    p.add_argument("-r", "--remote", action="store_true", default=True)
+    p.add_argument("-l", "--local", action="store_true")
+    p.add_argument("--port", type=int)
+    args = p.parse_args()
+    
+    f = Freeli()
+    
+    if args.port:
+        f.config.data.setdefault("api", {})["port"] = args.port
+    
+    use_remote = not args.local
+    
+    if args.cmd == "serve":
+        f.serve()
+    elif args.cmd == "config":
+        print(json.dumps(f.config.data, indent=2))
+    elif args.cmd == "models":
+        for m in find_models(): print(f"  • {m}")
+    elif args.cmd == "chat":
+        if args.message:
+            print(f.agent_chat(args.message, use_remote))
+        else:
+            print("Need -m MESSAGE")
+    else:
+        f.repl(use_remote)
+
+
+if __name__ == "__main__":
+    main()

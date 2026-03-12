@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PEEPEESEE ⚡ FUSION FORGE</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600&display=swap');
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{background:#050a14;color:#e0f4ff;font-family:'Orbitron',monospace;min-height:100vh;overflow-x:hidden;}
+
+        /* Starfield */
+        body::before{content:'';position:fixed;inset:0;background:
+            radial-gradient(1px 1px at 10% 20%,#fff,transparent),
+            radial-gradient(1px 1px at 80% 15%,#00d9ff,transparent),
+            radial-gradient(2px 2px at 50% 50%,#fff,transparent),
+            radial-gradient(1px 1px at 25% 75%,#b026ff,transparent),
+            radial-gradient(1px 1px at 70% 85%,#fff,transparent),
+            radial-gradient(1px 1px at 95% 40%,#00d9ff,transparent),
+            radial-gradient(2px 2px at 5% 60%,#fff,transparent),
+            radial-gradient(1px 1px at 60% 10%,#b026ff,transparent);
+            z-index:-1;animation:twinkle 4s ease-in-out infinite alternate;}
+        @keyframes twinkle{0%{opacity:.4;}100%{opacity:1;}}
+
+        header{text-align:center;padding:2rem 1rem 1rem;border-bottom:1px solid rgba(0,217,255,.2);}
+        header h1{font-size:clamp(1.4rem,4vw,2.8rem);font-weight:900;letter-spacing:.2em;
+            background:linear-gradient(90deg,#00d9ff,#b026ff,#00d9ff);
+            -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+            background-size:200%;animation:shimmer 3s linear infinite;}
+        @keyframes shimmer{0%{background-position:0%;}100%{background-position:200%;}}
+        header p{font-family:'Rajdhani',sans-serif;color:#7aa8c4;letter-spacing:.15em;margin-top:.3rem;font-size:.9rem;}
+
+        #status-bar{display:flex;justify-content:center;gap:2rem;padding:.7rem;
+            background:rgba(0,217,255,.05);border-bottom:1px solid rgba(0,217,255,.1);
+            font-family:'Rajdhani',sans-serif;font-size:.85rem;letter-spacing:.1em;}
+        .status-item span{color:#00d9ff;}
+
+        /* Main forge area */
+        .forge{display:flex;align-items:stretch;justify-content:center;gap:0;
+            padding:2rem 1rem;min-height:calc(100vh - 160px);max-width:1200px;margin:0 auto;}
+
+        /* Model panels */
+        .model-panel{flex:1;max-width:380px;display:flex;flex-direction:column;gap:1rem;
+            background:rgba(0,15,35,.6);border:1px solid rgba(0,217,255,.25);
+            border-radius:16px;padding:1.5rem;backdrop-filter:blur(10px);
+            box-shadow:0 0 30px rgba(0,217,255,.08);}
+        .model-panel.left{border-color:rgba(0,217,255,.35);box-shadow:0 0 40px rgba(0,217,255,.12),inset 0 0 20px rgba(0,217,255,.03);}
+        .model-panel.right{border-color:rgba(176,38,255,.35);box-shadow:0 0 40px rgba(176,38,255,.12),inset 0 0 20px rgba(176,38,255,.03);}
+
+        .panel-label{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;
+            color:#7aa8c4;margin-bottom:.5rem;}
+        .model-panel.left .panel-label{color:#00d9ff;}
+        .model-panel.right .panel-label{color:#b026ff;}
+
+        select{width:100%;background:rgba(0,10,25,.8);border:1px solid rgba(0,217,255,.3);
+            color:#e0f4ff;padding:.75rem 1rem;border-radius:8px;font-family:'Rajdhani',sans-serif;
+            font-size:1rem;letter-spacing:.05em;cursor:pointer;outline:none;
+            appearance:none;-webkit-appearance:none;
+            background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2300d9ff' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+            background-repeat:no-repeat;background-position:right 1rem center;}
+        .model-panel.right select{border-color:rgba(176,38,255,.3);
+            background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23b026ff' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");}
+        select:focus{border-color:#00d9ff;box-shadow:0 0 12px rgba(0,217,255,.4);}
+        .model-panel.right select:focus{border-color:#b026ff;box-shadow:0 0 12px rgba(176,38,255,.4);}
+        select option{background:#050a14;color:#e0f4ff;}
+
+        .model-info{flex:1;background:rgba(0,5,15,.4);border-radius:10px;padding:1rem;
+            font-family:'Rajdhani',sans-serif;font-size:.85rem;color:#7aa8c4;line-height:1.8;}
+        .model-info .name{font-size:1rem;font-weight:600;color:#e0f4ff;word-break:break-all;}
+        .model-info .size{color:#00d9ff;}
+        .model-panel.right .model-info .size{color:#b026ff;}
+        .model-info .empty{text-align:center;padding:2rem 0;opacity:.5;}
+
+        .load-btn{padding:.8rem;border-radius:8px;border:1px solid;font-family:'Orbitron',monospace;
+            font-size:.75rem;letter-spacing:.15em;cursor:pointer;transition:all .3s;text-transform:uppercase;}
+        .load-btn.left{background:rgba(0,217,255,.08);border-color:rgba(0,217,255,.5);color:#00d9ff;}
+        .load-btn.right{background:rgba(176,38,255,.08);border-color:rgba(176,38,255,.5);color:#b026ff;}
+        .load-btn:hover{transform:translateY(-2px);}
+        .load-btn.left:hover{background:rgba(0,217,255,.18);box-shadow:0 0 20px rgba(0,217,255,.4);}
+        .load-btn.right:hover{background:rgba(176,38,255,.18);box-shadow:0 0 20px rgba(176,38,255,.4);}
+        .load-btn:disabled{opacity:.4;cursor:not-allowed;transform:none;}
+
+        /* Center fusion column */
+        .fusion-col{display:flex;flex-direction:column;align-items:center;justify-content:center;
+            padding:0 1.5rem;gap:1.5rem;min-width:200px;}
+
+        /* Energy beams */
+        .beam-left,.beam-right{height:4px;width:60px;border-radius:2px;transition:opacity .5s;}
+        .beam-left{background:linear-gradient(90deg,transparent,#00d9ff);opacity:.3;}
+        .beam-right{background:linear-gradient(90deg,#b026ff,transparent);opacity:.3;}
+        .beams-active .beam-left{opacity:1;animation:beam-pulse-l .6s ease-in-out infinite alternate;}
+        .beams-active .beam-right{opacity:1;animation:beam-pulse-r .6s ease-in-out infinite alternate;}
+        @keyframes beam-pulse-l{0%{width:60px;opacity:.6;}100%{width:90px;opacity:1;}}
+        @keyframes beam-pulse-r{0%{width:60px;opacity:.6;}100%{width:90px;opacity:1;}}
+        .beams-row{display:flex;align-items:center;gap:.5rem;}
+
+        /* FUSE button */
+        #fuse-btn{width:120px;height:120px;border-radius:50%;
+            background:radial-gradient(circle,rgba(0,217,255,.15) 0%,rgba(176,38,255,.1) 60%,transparent 100%);
+            border:2px solid rgba(0,217,255,.5);
+            display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.3rem;
+            cursor:pointer;position:relative;overflow:hidden;transition:all .4s;
+            font-family:'Orbitron',monospace;letter-spacing:.1em;outline:none;}
+        #fuse-btn .btn-icon{font-size:2rem;line-height:1;}
+        #fuse-btn .btn-text{font-size:.6rem;color:#00d9ff;font-weight:700;}
+        #fuse-btn::before{content:'';position:absolute;inset:-2px;border-radius:50%;
+            background:conic-gradient(#00d9ff,#b026ff,#00d9ff);z-index:-1;opacity:.5;
+            animation:spin-ring 4s linear infinite;}
+        @keyframes spin-ring{100%{transform:rotate(360deg);}}
+        #fuse-btn:hover{transform:scale(1.08);border-color:#00d9ff;box-shadow:0 0 40px rgba(0,217,255,.5),0 0 80px rgba(176,38,255,.3);}
+        #fuse-btn:disabled{opacity:.5;cursor:not-allowed;transform:none;}
+
+        /* Fusion animation state */
+        #fuse-btn.fusing{animation:fuse-pulse 1s ease-in-out infinite;}
+        @keyframes fuse-pulse{0%,100%{transform:scale(1);box-shadow:0 0 30px rgba(0,217,255,.4);}
+            50%{transform:scale(1.12);box-shadow:0 0 70px rgba(176,38,255,.8),0 0 120px rgba(0,217,255,.5);}}
+
+        /* Particle burst on fusion */
+        .particle{position:absolute;width:6px;height:6px;border-radius:50%;pointer-events:none;
+            animation:particle-fly 1.2s ease-out forwards;}
+        @keyframes particle-fly{0%{transform:translate(0,0) scale(1);opacity:1;}
+            100%{transform:var(--tx,0) var(--ty,0) scale(0);opacity:0;}}
+
+        .fusion-label{font-size:.65rem;letter-spacing:.15em;color:#7aa8c4;text-align:center;}
+
+        /* Progress bar */
+        #progress-wrap{width:100%;background:rgba(0,217,255,.08);border-radius:4px;height:4px;overflow:hidden;display:none;}
+        #progress-bar{height:100%;width:0%;background:linear-gradient(90deg,#00d9ff,#b026ff);transition:width .3s;border-radius:4px;}
+
+        /* Log */
+        #log{margin:0 auto;max-width:1200px;padding:0 1rem 2rem;font-family:'Rajdhani',sans-serif;}
+        #log-entries{background:rgba(0,5,15,.6);border:1px solid rgba(0,217,255,.15);border-radius:10px;
+            padding:1rem;max-height:140px;overflow-y:auto;font-size:.82rem;color:#7aa8c4;}
+        #log-entries .log-line{padding:.1rem 0;border-bottom:1px solid rgba(255,255,255,.03);}
+        #log-entries .log-line.ok{color:#00d9ff;}
+        #log-entries .log-line.err{color:#ff4466;}
+        #log-entries .log-line.info{color:#b026ff;}
+
+        /* Launch CLI hint */
+        .cli-hint{text-align:center;padding:.5rem;font-family:'Rajdhani',sans-serif;font-size:.85rem;
+            color:#7aa8c4;letter-spacing:.1em;}
+        .cli-hint code{color:#00d9ff;background:rgba(0,217,255,.1);padding:.1rem .4rem;border-radius:4px;}
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>⚡ PEEPEESEE FUSION FORGE ⚡</h1>
+        <p>SELECT TWO GGUF MODELS · FUSE · LAUNCH</p>
+    </header>
+
+    <div id="status-bar">
+        <div class="status-item">ENGINE: <span id="sb-status">LOADING...</span></div>
+        <div class="status-item">ACTIVE: <span id="sb-model">—</span></div>
+        <div class="status-item">HYBRIDIZER: <span id="sb-hybrid">—</span></div>
+    </div>
+
+    <div class="forge">
+        <!-- LEFT PANEL -->
+        <div class="model-panel left">
+            <div class="panel-label">⬡ MODEL ALPHA</div>
+            <select id="sel-a"><option value="">— select model —</option></select>
+            <div class="model-info" id="info-a"><div class="empty">No model selected</div></div>
+            <button class="load-btn left" id="load-a" disabled onclick="loadSingle('a')">LOAD ALPHA</button>
+        </div>
+
+        <!-- CENTER FUSION -->
+        <div class="fusion-col">
+            <div class="beams-row" id="beams">
+                <div class="beam-left"></div>
+                <button id="fuse-btn" onclick="fuseModels()" disabled>
+                    <span class="btn-icon">⚡</span>
+                    <span class="btn-text">FUSE</span>
+                </button>
+                <div class="beam-right"></div>
+            </div>
+            <div class="fusion-label" id="fusion-status">SELECT BOTH MODELS</div>
+            <div id="progress-wrap"><div id="progress-bar"></div></div>
+        </div>
+
+        <!-- RIGHT PANEL -->
+        <div class="model-panel right">
+            <div class="panel-label">⬡ MODEL BETA</div>
+            <select id="sel-b"><option value="">— select model —</option></select>
+            <div class="model-info" id="info-b"><div class="empty">No model selected</div></div>
+            <button class="load-btn right" id="load-b" disabled onclick="loadSingle('b')">LOAD BETA</button>
+        </div>
+    </div>
+
+    <div id="log">
+        <div id="log-entries"><div class="log-line info">⚡ PEEPEESEE FUSION FORGE — READY</div></div>
+    </div>
+    <div class="cli-hint">After fusion, run: <code>python peepeesee_agent.py</code></div>
+
+    <script>
+    const API = 'http://localhost:8000';
+    let models = [];
+    let fusing = false;
+
+    function log(msg, type='') {
+        const el = document.getElementById('log-entries');
+        const d = document.createElement('div');
+        d.className = 'log-line ' + type;
+        d.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+        el.appendChild(d);
+        el.scrollTop = el.scrollHeight;
+        if (el.children.length > 60) el.removeChild(el.firstChild);
+    }
+
+    async function fetchStatus() {
+        try {
+            const r = await fetch(API + '/status');
+            const d = await r.json();
+            document.getElementById('sb-status').textContent = d.status || 'ENGAGED';
+            document.getElementById('sb-model').textContent = d.active_model || '—';
+            document.getElementById('sb-hybrid').textContent = d.dashboard?.hybridizer_status || '—';
+        } catch(e) {
+            document.getElementById('sb-status').textContent = 'OFFLINE';
+        }
+    }
+
+    async function fetchModels() {
+        try {
+            const r = await fetch(API + '/v1/models');
+            const d = await r.json();
+            models = d.models || d.data || d || [];
+            if (!Array.isArray(models)) models = Object.keys(models);
+            populateSelects();
+            log('Found ' + models.length + ' models', 'ok');
+        } catch(e) {
+            log('Cannot reach PEEPEESEE server at ' + API, 'err');
+        }
+    }
+
+    function populateSelects() {
+        ['a','b'].forEach(side => {
+            const sel = document.getElementById('sel-' + side);
+            const prev = sel.value;
+            sel.innerHTML = '<option value="">— select model —</option>';
+            models.forEach(m => {
+                const name = typeof m === 'string' ? m : m.id || m.name;
+                const opt = document.createElement('option');
+                opt.value = name; opt.textContent = name;
+                sel.appendChild(opt);
+            });
+            if (prev) sel.value = prev;
+            onSelectChange(side);
+        });
+    }
+
+    function onSelectChange(side) {
+        const val = document.getElementById('sel-' + side).value;
+        const infoEl = document.getElementById('info-' + side);
+        const loadBtn = document.getElementById('load-' + side);
+        if (val) {
+            infoEl.innerHTML = '<div class="name">' + val + '</div>';
+            loadBtn.disabled = false;
+        } else {
+            infoEl.innerHTML = '<div class="empty">No model selected</div>';
+            loadBtn.disabled = true;
+        }
+        checkFuseReady();
+    }
+
+    function checkFuseReady() {
+        const a = document.getElementById('sel-a').value;
+        const b = document.getElementById('sel-b').value;
+        const btn = document.getElementById('fuse-btn');
+        const lbl = document.getElementById('fusion-status');
+        const beams = document.getElementById('beams');
+        if (a && b && a !== b) {
+            btn.disabled = false;
+            lbl.textContent = 'READY TO FUSE';
+            beams.classList.add('beams-active');
+        } else if (a && b && a === b) {
+            btn.disabled = true;
+            lbl.textContent = 'SELECT DIFFERENT MODELS';
+            beams.classList.remove('beams-active');
+        } else {
+            btn.disabled = true;
+            lbl.textContent = 'SELECT BOTH MODELS';
+            beams.classList.remove('beams-active');
+        }
+    }
+
+    async function loadSingle(side) {
+        const model = document.getElementById('sel-' + side).value;
+        if (!model) return;
+        log('Loading ' + model + '...', 'info');
+        try {
+            const r = await fetch(API + '/v1/models/load', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({model})
+            });
+            const d = await r.json();
+            if (d.status === 'success') {
+                log('✓ Loaded: ' + model, 'ok');
+                fetchStatus();
+            } else throw new Error(d.detail || 'load failed');
+        } catch(e) { log('✗ ' + e.message, 'err'); }
+    }
+
+    function spawnParticles(btn) {
+        const colors = ['#00d9ff','#b026ff','#ffffff','#ff44aa'];
+        for (let i = 0; i < 20; i++) {
+            const p = document.createElement('div');
+            p.className = 'particle';
+            const angle = (i / 20) * 360;
+            const dist = 80 + Math.random() * 60;
+            const tx = Math.cos(angle * Math.PI/180) * dist + 'px';
+            const ty = Math.sin(angle * Math.PI/180) * dist + 'px';
+            p.style.cssText = `--tx:translateX(${tx});--ty:translateY(${ty});
+                background:${colors[i%colors.length]};
+                left:calc(50% - 3px);top:calc(50% - 3px);
+                animation-delay:${Math.random()*0.3}s`;
+            btn.appendChild(p);
+            setTimeout(() => p.remove(), 1500);
+        }
+    }
+
+    async function fuseModels() {
+        if (fusing) return;
+        const a = document.getElementById('sel-a').value;
+        const b = document.getElementById('sel-b').value;
+        if (!a || !b || a === b) return;
+
+        fusing = true;
+        const btn = document.getElementById('fuse-btn');
+        const lbl = document.getElementById('fusion-status');
+        const prog = document.getElementById('progress-wrap');
+        const bar = document.getElementById('progress-bar');
+
+        btn.classList.add('fusing');
+        btn.disabled = true;
+        prog.style.display = 'block';
+        spawnParticles(btn);
+        log('⚡ FUSING: ' + a + ' × ' + b, 'info');
+
+        let pct = 0;
+        const ticker = setInterval(() => {
+            pct = Math.min(pct + 3, 90);
+            bar.style.width = pct + '%';
+        }, 100);
+
+        try {
+            lbl.textContent = 'CONFIGURING HYBRID...';
+            const r1 = await fetch(API + '/v1/hybridize/configure', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({models:[a, b]})
+            });
+            if (!r1.ok) throw new Error('configure failed');
+
+            lbl.textContent = 'TRIGGERING FUSION...';
+            const r2 = await fetch(API + '/v1/hybridize/trigger', {method:'POST'});
+            if (!r2.ok) throw new Error('trigger failed');
+
+            clearInterval(ticker);
+            bar.style.width = '100%';
+            lbl.textContent = '✓ FUSION COMPLETE — RUN peepeesee_agent.py';
+            log('✓ FUSION COMPLETE: ' + a + ' ⚡ ' + b, 'ok');
+            spawnParticles(btn);
+            fetchStatus();
+        } catch(e) {
+            clearInterval(ticker);
+            lbl.textContent = '✗ FUSION FAILED: ' + e.message;
+            log('✗ Fusion failed: ' + e.message, 'err');
+        }
+
+        btn.classList.remove('fusing');
+        btn.disabled = false;
+        fusing = false;
+        setTimeout(() => { prog.style.display='none'; bar.style.width='0%'; }, 3000);
+    }
+
+    document.getElementById('sel-a').addEventListener('change', () => onSelectChange('a'));
+    document.getElementById('sel-b').addEventListener('change', () => onSelectChange('b'));
+
+    // Init
+    fetchStatus();
+    fetchModels();
+    setInterval(fetchStatus, 4000);
+    </script>
+</body>
+</html>

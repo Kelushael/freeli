@@ -1,0 +1,27 @@
+# Ignore everything
+*
+
+# Whitelist project structure
+!/.freeli/
+!/.freeli/**
+!/gguf_wrapper.py
+!/free-cli.bat
+!/free-li.bat
+!/freeli.bat
+!/setup_remote.sh
+!/static/
+!/static/**
+!/api_specs.md
+!/agent.py
+!/README.md
+!/.gitignore
+
+# Ignore binaries and large files
+*.exe
+*.dll
+*.zip
+*.gguf
+*.7z
+.freeli/bin/
+!.freeli/bin/.keep
+
