@@ -568,19 +568,14 @@ class Freeli:
                 base += f"\n\n--- MEMORY ---\n{mem}"
         return base
 
-    def chat_remote(self, message: str, url: str = None) -> str:
-        """Chat via remote API."""
+    def chat_remote(self, messages: list, url: str = None) -> str:
+        """Chat via remote API with full message history."""
         url = url or self.config.get("remote.url", "http://187.77.208.28:8125")
         key = self.config.get("remote.key")
         
-        system = self._get_system_prompt()
-        
         data = json.dumps({
             "model": "freeli",
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": message}
-            ],
+            "messages": messages,
             "max_tokens": self.config.get("inference.max_tokens", 4096),
             "temperature": self.config.get("inference.temperature", 0.7)
         }).encode('utf-8')
@@ -597,7 +592,6 @@ class Freeli:
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
-                # Handle different response formats
                 msg = result.get("choices", [{}])[0].get("message", {})
                 content = msg.get("content", "")
                 reasoning = msg.get("reasoning_content", "")
@@ -607,14 +601,24 @@ class Freeli:
         except Exception as e:
             return f"[ERROR] {e}"
     
-    def chat_local(self, message: str) -> str:
-        """Chat via local llama-cli."""
+    def chat_local(self, messages: list) -> str:
+        """Chat via local llama-cli with full history."""
         model = self.get_model()
         if not model:
             return "[ERROR] No model found"
         
-        system = self._get_system_prompt()
-        prompt = f"{system}\n\nUser: {message}\nAssistant:"
+        # Construct prompt from messages
+        prompt = ""
+        for m in messages:
+            role = m["role"]
+            content = m["content"]
+            if role == "system":
+                prompt += f"{content}\n\n"
+            elif role == "user":
+                prompt += f"User: {content}\n"
+            elif role == "assistant":
+                prompt += f"Assistant: {content}\n"
+        prompt += "Assistant:"
         
         cmd = [
             str(LLAMA_CLI), "-m", model,
@@ -630,27 +634,52 @@ class Freeli:
             return f"[ERROR] {e}"
 
     
-    def agent_chat(self, message: str, use_remote: bool = True) -> str:
-        """Chat with tool execution loop."""
-        # Get response
-        if use_remote:
-            response = self.chat_remote(message)
-        else:
-            response = self.chat_local(message)
+    def agent_chat(self, user_input: str, use_remote: bool = True) -> str:
+        """Chat with autonomous tool execution loop (Max 5 turns)."""
+        system = self._get_system_prompt()
+        messages = [{"role": "system", "content": system}]
         
-        # Parse and execute any tool calls
-        tool_calls = self.parse_tool_calls(response)
-        if tool_calls:
+        # Handle simple history (TODO: full session history)
+        messages.append({"role": "user", "content": user_input})
+        
+        final_response = ""
+        PINK = "\033[95m"
+        BLUE = "\033[96m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+
+        for turn in range(5): # Max 5 turns to prevent infinite loops
+            # 1. Get Model Response
+            if use_remote:
+                response = self.chat_remote(messages)
+            else:
+                response = self.chat_local(messages)
+            
+            # 2. Parse Tools
+            tool_calls = self.parse_tool_calls(response)
+            
+            if not tool_calls:
+                final_response = response
+                return final_response # Done
+            
+            # 3. Execute Tools
+            messages.append({"role": "assistant", "content": response})
+            print(f"{BLUE}{response}{RESET}") # Stream thoughts/calls
+            
             tool_outputs = []
             for name, content in tool_calls:
-                print(f"  [TOOL] {name}...")
-                result = self.execute_tool(name, content)
-                tool_outputs.append(f"[{name}]: {result}")
+                print(f"{YELLOW}  [EXEC] {name}...{RESET}")
+                try:
+                    result = self.execute_tool(name, content)
+                    tool_outputs.append(f"<tool_result name=\"{name}\">\n{result}\n</tool_result>")
+                except Exception as e:
+                     tool_outputs.append(f"<tool_result name=\"{name}\">Error: {e}</tool_result>")
             
-            # Append tool results to response
-            response += "\n\n--- Tool Results ---\n" + "\n".join(tool_outputs)
+            # 4. Feed back to model
+            tool_feedback = "\n".join(tool_outputs)
+            messages.append({"role": "user", "content": f"Tool Outputs:\n{tool_feedback}\n\nContinue."})
         
-        return response
+        return f"{PINK}[STOPPED]{RESET} Max turns reached.\nLast Output: {response}"
     
     def serve(self):
         """Start local llama-server."""
