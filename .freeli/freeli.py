@@ -45,10 +45,22 @@ else:
 
 def find_models():
     models = []
-    for path in [MODELS_DIR, FREELI_HOME / "models", Path.home() / "Downloads"]:
+    # Search paths: ., .freeli/models, ~/models, Downloads
+    search_paths = [Path.cwd(), FREELI_HOME / "models", MODELS_DIR, Path.home() / "Downloads"]
+    
+    for path in search_paths:
         if path.exists():
             models.extend(path.glob("*.gguf"))
-    return sorted(models, key=lambda x: x.stat().st_size, reverse=True)
+            
+    # Remove duplicates
+    models = list(set(models))
+    
+    # Sort by: 1. contains 'qwen', 2. size (desc)
+    def sort_key(p):
+        is_qwen = "qwen" in p.name.lower()
+        return (not is_qwen, -p.stat().st_size) # False < True, so Qwen comes first
+        
+    return sorted(models, key=sort_key)
 
 def is_port_open(host, port, timeout=2):
     try:
@@ -568,8 +580,47 @@ class Freeli:
                 base += f"\n\n--- MEMORY ---\n{mem}"
         return base
 
+    def _ensure_remote_key(self):
+        """Lazy-load API key from origin via SSH if missing."""
+        remote = self.config.data.get("remote", {})
+        url = remote.get("url", "")
+        key = remote.get("key", "")
+        
+        # Colors (since config doesn't have them)
+        BLUE = "\033[96m"
+        PINK = "\033[95m"
+        RESET = "\033[0m"
+
+        # If we have a URL but no key (or placeholder), try to fetch it
+        if url and (not key or len(key) < 10):
+            # Extract host from URL (http://1.2.3.4:8000 -> 1.2.3.4)
+            try:
+                ip = url.split("//")[1].split(":")[0]
+                # Default to root@ip if not stored
+                origin_ssh = remote.get("ssh_host", f"root@{ip}")
+                
+                print(f"{BLUE}[Auto-Auth] Fetching key from {origin_ssh}...{RESET}")
+                cmd = f"ssh -o StrictHostKeyChecking=no {origin_ssh} \"cat api_key.txt\""
+                res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                
+                if res.returncode == 0:
+                    new_key = res.stdout.strip()
+                    if len(new_key) > 10:
+                        self.config.data.setdefault("remote", {})["key"] = new_key
+                        self.config.save()
+                        print(f"{BLUE}[Success] Key secured.{RESET}")
+                        return new_key
+                else:
+                    print(f"{PINK}[Auth Fail] Could not fetch key: {res.stderr.strip()}{RESET}")
+            except Exception as e:
+                print(f"{PINK}[Auth Error] Could not auto-fetch key: {e}{RESET}")
+        return key
+
     def chat_remote(self, messages: list, url: str = None) -> str:
         """Chat via remote API with full message history."""
+        # Auto-auth before chatting
+        self._ensure_remote_key()
+        
         url = url or self.config.get("remote.url", "http://187.77.208.28:8125")
         key = self.config.get("remote.key")
         
@@ -707,406 +758,535 @@ class Freeli:
     def repl(self, use_remote: bool = True):
         """Interactive agent REPL."""
         model = self.get_model()
-        remote = self.config.get("remote.url", "http://187.77.208.28:8125")
+        remote_url = self.config.get("remote.url", "http://187.77.208.28:8000")
         
-        # THEME: Pink, Baby Blue, Yellow, Black
+        # ANSI Colors
         PINK = "\033[95m"
         BLUE = "\033[96m"
         YELLOW = "\033[93m"
         RESET = "\033[0m"
-        BOLD = "\033[1m"
         
-        BANNER = f"""{{BLUE}}
-      ,           {{PINK}}   _  _   {{BLUE}}   / \\__
-    __)\\_         {{PINK}}  ( )( )  {{BLUE}}  (    @\\___
-  (\\_.-'   {{YELLOW}}~~~~~{{PINK}}   |/|    {{BLUE}}  /         O
-           {{YELLOW}}~~~~~{{PINK}}  ( )( )  {{BLUE}} /   (_____/
-   {{YELLOW}}FREELI{{RESET}}       {{PINK}}   -  -   {{BLUE}}/_____/
-   {{YELLOW}}Sovereign AI{{RESET}}
+        # ASCII Art (Fixed escapes)
+        BANNER = f"""{BLUE}
+      ,           {PINK}   _  _   {BLUE}   / \\__
+    __)\\_         {PINK}  ( )( )  {BLUE}  (    @\\___
+  (\\_.-'   {YELLOW}~~~~~{PINK}   |/|    {BLUE}  /         O
+           {YELLOW}~~~~~{PINK}  ( )( )  {BLUE} /   (_____/
+   {YELLOW}FREELI{RESET}       {PINK}   -  -   {BLUE}/_____/
+   {YELLOW}Sovereign AI{RESET}
 """
         print(BANNER)
         
-        mode = f"{BLUE}Remote: {remote}{RESET}" if use_remote else f"{YELLOW}Local: {Path(model).name if model else 'none'}{RESET}"
+        mode_str = f"{BLUE}Remote: {remote_url}{RESET}" if use_remote else f"{YELLOW}Local: {Path(model).name if model else 'none'}{RESET}"
         print(f"{PINK}Tools:{RESET} code, files, edit, grep, web, sql, ask, artifact, screenshot")
         print(f"{PINK}Cmds:{RESET}  /spawn /addcmd /addtool /config /addorigin /addmem /ide /quit\n")
-        print(f"{mode}\n")
+        print(f"{mode_str}\n")
         
-        while True:
+        # Try importing prompt_toolkit for better TUI
+        try:
+            from prompt_toolkit import PromptSession
+            from prompt_toolkit.history import FileHistory
+            from prompt_toolkit.styles import Style as PtStyle
+            from prompt_toolkit.formatted_text import HTML
+            
+            history_file = WORKSPACE / ".history"
+            
+            # Custom Style
+            style = PtStyle.from_dict({
+                'prompt': '#ff69b4 bold',       # Hot Pink
+                'user': '#00bfff',              # Deep Sky Blue
+                'toolbar': 'bg:#333333 #ffffff',
+            })
+            
+            session = PromptSession(history=FileHistory(str(history_file)))
+            
+            while True:
+                try:
+                    # Bottom toolbar status
+                    def get_toolbar():
+                        return f" Mode: {'REMOTE' if use_remote else 'LOCAL'} | Url: {remote_url} "
+                    
+                    user = session.prompt(HTML('<prompt>[you]</prompt> <user>></user> '), style=style, bottom_toolbar=get_toolbar).strip()
+                    
+                    if not user: continue
+                    if user in ["/quit", "exit"]: break
+                    
+                    # Handle Commands
+                    if user.startswith("/"):
+                        self.handle_command(user)
+                        continue
+                        
+                    # Chat
+                    print(f"{BLUE}[freeli] thinking...{RESET}")
+                    print(self.agent_chat(user, use_remote))
+                    
+                except KeyboardInterrupt:
+                    continue
+                except EOFError:
+                    break
+        except ImportError:
+            # Fallback to simple input
+            print(f"{YELLOW}[WARN] prompt_toolkit not found. Using simple input.{RESET}")
+            while True:
+                try:
+                    user = input(f"\n{PINK}[you]{BLUE} > {YELLOW}").strip()
+                    print(RESET, end="")
+                    
+                    if not user: continue
+                    if user == "/quit": break
+                    
+                    if user.startswith("/"):
+                        self.handle_command(user)
+                        continue
+
+                    print(f"{BLUE}[freeli] thinking...{RESET}")
+                    print(self.agent_chat(user, use_remote))
+                    
+                except KeyboardInterrupt:
+                    print()
+                    continue
+
+    def handle_command(self, user: str):
+        """Handle slash commands."""
+        cmd = user.split()[0]
+        PINK = "\033[95m"
+        BLUE = "\033[96m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        
+        if cmd.startswith("/hostinger"):
+            parts = user.split()
+            token = parts[1] if len(parts) > 1 else ""
+            
+            # Auto-load from config if missing
+            if not token:
+                token = self.config.data.get("hostinger_token", "")
+                
+            if not token:
+                token = input("Hostinger API Token > ").strip()
+            
+            if not token: return
+            
+            # Save for future
+            if token != self.config.data.get("hostinger_token"):
+                self.config.data["hostinger_token"] = token
+                self.config.save()
+
+            print(f"{BLUE}[Hostinger] Connecting to API...{RESET}")
+            
+            def h_req(endpoint, method="GET", data=None):
+                url = f"https://developers.hostinger.com/api/vps/v1{endpoint}"
+                req = urllib.request.Request(url, headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }, method=method)
+                if data:
+                    req.data = json.dumps(data).encode('utf-8')
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return json.loads(r.read().decode())
+                except urllib.error.HTTPError as e:
+                    print(f"{PINK}[API Error] {e.code}: {e.read().decode()[:200]}{RESET}")
+                    return None
+                except Exception as e:
+                    print(f"{PINK}[Error] {e}{RESET}")
+                    return None
+
+            # 1. List VPS
+            print(f"{YELLOW}Fetching VPS instances...{RESET}")
+            vps_list = h_req("/virtual-machines")
+            
+            # If standard endpoint fails, try /instances as fallback?
+            # But we confirmed /virtual-machines worked with curl.
+            if not vps_list or 'data' not in vps_list:
+                # Try simple list if direct array?
+                # The previous curl output started with `[{"id":...`
+                # So it's a list, not a dict with 'data'.
+                if isinstance(vps_list, list):
+                    instances = vps_list
+                else:
+                    print(f"{PINK}No VPS instances found or API error.{RESET}")
+                    return
+            else:
+                instances = vps_list['data']
+
+            if not instances:
+                print(f"{PINK}You have no VPS instances.{RESET}")
+                return
+
+            print(f"\n{BLUE}Available VPS:{RESET}")
+            for i, vps in enumerate(instances):
+                ip_list = vps.get('ipv4', [])
+                ip = ip_list[0]['address'] if ip_list else 'Unknown'
+                name = vps.get('hostname', 'Unnamed')
+                status = vps.get('state', 'unknown')
+                print(f"  [{i}] {name} ({ip}) - {status}")
+            
             try:
-                # Custom colorful prompt
-                user = input(f"\n{PINK}[you]{BLUE} > {YELLOW}").strip()
-                print(RESET, end="") # Reset after input
-                
-                if not user: continue
-                if user == "/quit": break
-                
-                if user == "/config":
-                    print(json.dumps(self.config.data, indent=2))
-                    continue
-                
-                if user.startswith("/addorigin"):
-                    parts = user.split()
-                    origin_input = parts[1] if len(parts) > 1 else ""
-                    
-                    if not origin_input:
-                        print(f"\n{PINK}[FREELI CONFIG]{RESET} Setup Sovereign Origin")
-                        origin_input = input(f"{BLUE}SSH Host (e.g. root@1.2.3.4) > {YELLOW}").strip()
-                    
-                    if origin_input:
-                        print(f"\n{YELLOW}Bootstrapping sovereign connection to {origin_input}...{RESET}")
-                        
-                        # 1. SSH to get the key
-                        try:
-                            # Use ssh to cat the key file
-                            cmd = f"ssh -o StrictHostKeyChecking=no {origin_input} \"cat api_key.txt\""
-                            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                            
-                            if result.returncode != 0:
-                                print(f"{PINK}[ERROR]{RESET} SSH handshake failed.")
-                                print(f"{PINK}Details:{RESET} {result.stderr.strip()}")
-                                continue
-                                
-                            remote_key = result.stdout.strip()
-                            # Check for valid key length (approx 64 chars)
-                            if len(remote_key) < 10: 
-                                print(f"{PINK}[ERROR]{RESET} Invalid key retrieved: '{remote_key}'")
-                                continue
-                                
-                            # 2. Extract IP for HTTP URL
-                            if "@" in origin_input:
-                                host_ip = origin_input.split("@")[1]
-                            else:
-                                host_ip = origin_input
-                                
-                            remote_url = f"http://{host_ip}:8000/v1"
-                            
-                            # 3. Update config
-                            self.config.data.setdefault("remote", {})["url"] = remote_url
-                            self.config.data.setdefault("remote", {})["key"] = remote_key
-                            self.config.save()
-                            
-                            print(f"{BLUE}[SUCCESS]{RESET} Sovereign link established!")
-                            print(f"{PINK}Remote:{RESET} {remote_url}")
-                            print(f"{PINK}Key:{RESET}    {remote_key[:8]}...{remote_key[-8:]} (securely saved)")
-                            
-                        except Exception as e:
-                            print(f"{PINK}[ERROR]{RESET} Bootstrap failed: {e}")
-                    continue
+                sel_input = input(f"\n{YELLOW}Select VPS [0-{len(instances)-1}] > {RESET}").strip()
+                if not sel_input: return
+                sel = int(sel_input)
+                target = instances[sel]
+                ip_list = target.get('ipv4', [])
+                ip = ip_list[0]['address'] if ip_list else None
+                vps_id = target.get('id')
+            except:
+                print("Invalid selection")
+                return
 
-                if user == "/addkey":
-                    print("\n[FREELI CONFIG] Add Remote Server Key")
-                    alias = input("Server Alias (e.g. origin, gpu1) > ").strip()
-                    if alias:
-                        url = input("Server URL (e.g. http://1.2.3.4:8000) > ").strip()
-                        key = input("API Key > ").strip()
-                        
-                        if 'servers' not in self.config.data:
-                            self.config.data['servers'] = {}
-                        
-                        self.config.data['servers'][alias] = {"url": url, "key": key}
-                        
-                        # If origin, update main remote
-                        if alias == "origin":
-                            self.config.data.setdefault("remote", {})["url"] = url
-                            self.config.data.setdefault("remote", {})["key"] = key
-                            
+            if not ip:
+                print("Error: No IP found for VPS")
+                return
+
+            # 2. Try to Connect via SSH first (Fast Path)
+            print(f"{YELLOW}Attempting direct SSH connection...{RESET}")
+            try:
+                # Try fetching key immediately
+                ssh_cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{ip} \"cat api_key.txt\""
+                k_res = subprocess.run(ssh_cmd, shell=True, capture_output=True, text=True)
+                
+                if k_res.returncode == 0:
+                    api_key = k_res.stdout.strip()
+                    if len(api_key) > 10:
+                        self.config.data.setdefault("remote", {})["url"] = f"http://{ip}:8000"
+                        self.config.data.setdefault("remote", {})["ssh_host"] = f"root@{ip}"
+                        self.config.data["remote"]["key"] = api_key
                         self.config.save()
-                        print(f"[OK] Saved server '{alias}'")
-                    continue
+                        print(f"{BLUE}[SUCCESS] Connected to {name}!{RESET}")
+                        print(f"Origin: http://{ip}:8000")
+                        return
+            except Exception:
+                pass
+
+            print(f"{PINK}[Info] Direct SSH failed. Proceeding with key injection...{RESET}")
+
+            # 3. Ensure Local SSH Key
+            ssh_dir = Path.home() / ".ssh"
+            pub_path = ssh_dir / "id_rsa.pub"
+            if not pub_path.exists():
+                print(f"{YELLOW}Generating local SSH key...{RESET}")
+                ssh_dir.mkdir(mode=0o700, exist_ok=True)
+                subprocess.run(["ssh-keygen", "-t", "rsa", "-b", "4096", "-f", str(ssh_dir / "id_rsa"), "-N", ""], capture_output=True)
+            
+            pub_key = pub_path.read_text(encoding="utf-8").strip()
+
+            # 4. Add Key to Hostinger (Global)
+            print(f"{BLUE}Registering SSH key with Hostinger...{RESET}")
+            key_name = f"freeli-auto-{int(time.time())}"
+            # Try to register
+            resp = h_req("/public-keys", "POST", {"name": key_name, "key": pub_key})
+            
+            key_id = None
+            if resp and 'id' in resp: 
+                 key_id = resp['id']
+            elif resp and 'data' in resp and 'id' in resp['data']:
+                 key_id = resp['data']['id']
+            else:
+                 # Check existing
+                 print(f"{YELLOW}Checking existing keys...{RESET}")
+                 keys = h_req("/public-keys")
+                 # Check if list or dict
+                 k_list = keys if isinstance(keys, list) else keys.get('data', [])
+                 
+                 # Clean local key (remove comment)
+                 local_body = pub_key.split()[1]
+                 
+                 for k in k_list:
+                     remote_body = k.get('key', '').split()
+                     if len(remote_body) > 1 and remote_body[1] == local_body:
+                         key_id = k['id']
+                         print(f"{BLUE}Found existing matching key ({key_id}).{RESET}")
+                         break
+            
+            if not key_id:
+                print(f"{PINK}[Error] Could not register or find SSH key on Hostinger.{RESET}")
+                # Don't return, try to proceed anyway just in case
+            else:
+                # 5. Attach Key to VPS
+                print(f"{BLUE}Injecting key into VPS...{RESET}")
+                # Try plain attach
+                res = h_req(f"/virtual-machines/{vps_id}/public-keys", "POST", {"key_ids": [key_id]})
+                if not res:
+                     print(f"{YELLOW}[Warn] Key injection failed (API might be read-only). Continuing...{RESET}")
+
+            # 6. Configure Freeli & Fetch Key
+            print(f"{BLUE}Configuring Freeli...{RESET}")
+            url = f"http://{ip}:8000"
+            self.config.data.setdefault("remote", {})["url"] = url
+            self.config.data.setdefault("remote", {})["ssh_host"] = f"root@{ip}"
+            
+            # Fetch API Key
+            print(f"{YELLOW}Fetching Sovereign API Key via SSH...{RESET}")
+            try:
+                # We need to wait a moment for key propagation if it was just added?
+                # Usually fast.
+                ssh_cmd = f"ssh -o StrictHostKeyChecking=no root@{ip} \"cat api_key.txt\""
+                k_res = subprocess.run(ssh_cmd, shell=True, capture_output=True, text=True)
                 
-                if user == "/rotatekey":
-                    remote = self.config.data.get("remote", {}).get("url", "")
-                    if not remote:
-                         print(f"{PINK}[ERROR]{RESET} No remote origin configured.")
-                         continue
-                         
-                    host_ip = remote.split("//")[1].split(":")[0]
-                    origin = f"root@{host_ip}" # Assumption: running as root
-                    
-                    print(f"{YELLOW}Rotating Sovereign Key on {origin}...{RESET}")
-                    
-                    try:
-                        # 1. SSH command to kill wrapper, delete key, restart wrapper
-                        remote_cmd = (
-                            "pkill -f gguf_wrapper.py; "
-                            "rm -f api_key.txt; "
-                            "screen -dmS freeli_wrapper bash -c 'python3 gguf_wrapper.py > wrapper.log 2>&1'"
-                        )
-                        subprocess.run(f"ssh {origin} \"{remote_cmd}\"", shell=True)
-                        
-                        # 2. Wait for regeneration
-                        print(f"{BLUE}Waiting for key regeneration...{RESET}")
-                        time.sleep(5)
-                        
-                        # 3. Fetch new key
-                        res = subprocess.run(f"ssh {origin} \"cat api_key.txt\"", shell=True, capture_output=True, text=True)
-                        new_key = res.stdout.strip()
-                        
-                        if len(new_key) > 10:
-                            self.config.data["remote"]["key"] = new_key
-                            self.config.save()
-                            print(f"{BLUE}[SUCCESS]{RESET} Key rotated!")
-                            print(f"{PINK}New Key:{RESET} {new_key[:8]}...{new_key[-8:]}")
-                        else:
-                            print(f"{PINK}[ERROR]{RESET} Failed to fetch new key.")
-                            
-                    except Exception as e:
-                         print(f"{PINK}[ERROR]{RESET} Rotation failed: {e}")
-                    continue
-
-                if user == "/addmem":
-                    print("\n[FREELI MEMORY] Add Persistent Context")
-                    mem = input("Memory to save > ").strip()
-                    if mem:
-                        mem_path = WORKSPACE / "memory.txt"
-                        mode = "a" if mem_path.exists() else "w"
-                        with open(mem_path, mode, encoding="utf-8") as f:
-                            f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {mem}\n")
-                        print(f"[OK] Memory saved to {mem_path}")
-                    continue
-
-                if user == "/spawn":
-                    print("\n[FREELI SPAWN] Provision Remote Inference Server")
-                    host = input("SSH Host (e.g. root@1.2.3.4) > ").strip()
-                    if not host: continue
-                    
-                    print(f"[freeli] Provisioning {host}...")
-                    
-                    # Create provision script
-                    script_content = """#!/bin/bash
-                    set -e
-                    echo "--- Updating System ---"
-                    export DEBIAN_FRONTEND=noninteractive
-                    apt-get update -qq && apt-get install -y -qq build-essential git cmake wget screen python3-pip curl
-
-                    echo "--- Installing Python Libs ---"
-                    pip3 install httpx uvicorn fastapi --break-system-packages
-                    
-                    echo "--- Setting up Llama.cpp (CMake) ---"
-                    if [ ! -d "llama.cpp" ]; then
-                        git clone https://github.com/ggerganov/llama.cpp
-                        cd llama.cpp
-                        cmake -B build -DGGML_NATIVE=OFF
-                        cmake --build build --config Release -j$(nproc)
-                        cd ..
-                    fi
-                    
-                    echo "--- Downloading Model (Phi-2) ---"
-                    mkdir -p models
-                    if [ ! -f "models/phi-2.Q4_K_M.gguf" ]; then
-                        wget -q --show-progress -O models/phi-2.Q4_K_M.gguf https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf
-                    fi
-
-                    echo "--- Setting up Wrapper ---"
-                    # Download wrapper or create it (simplified version for spawn)
-                    # For now, we assume user will SCP their enhanced wrapper or we can embed a simple one.
-                    # Let's just launch llama-server directly for basic spawn, 
-                    # OR we can try to replicate the wrapper. 
-                    # Given the complexity, let's stick to the raw server for the basic /spawn command 
-                    # unless we want to embed the whole wrapper script in this f-string.
-                    
-                    echo "--- Starting Server ---"
-                    # Kill existing
-                    pkill -f llama-server || true
-                    
-                    # Run in screen
-                    screen -dmS freeli ./llama.cpp/build/bin/llama-server -m models/phi-2.Q4_K_M.gguf -c 2048 --host 0.0.0.0 --port 8125
-                    
-                    echo "SUCCESS: Server running on port 8125"
-                    """
-                    
-                    try:
-                        # Write local temp script
-                        prov_path = WORKSPACE / "provision.sh"
-                        prov_path.write_text(script_content, encoding='utf-8')
-                        
-                        # SCP script
-                        tgt = f"{host}:/tmp/provision_freeli.sh"
-                        print(f"• Uploading script to {tgt}...")
-                        subprocess.run(["scp", str(prov_path), tgt], check=True)
-                        
-                        # Execute SSH
-                        print(f"• Executing on {host}...")
-                        subprocess.run(["ssh", host, "chmod +x /tmp/provision_freeli.sh && /tmp/provision_freeli.sh"], check=True)
-                        
-                        ip = host.split("@")[1] if "@" in host else host
-                        new_url = f"http://{ip}:8125"
-                        print(f"\n[OK] Remote server provisioned at {new_url}")
-                        
-                        if input("Set as current origin? (y/n) > ").lower().startswith("y"):
-                            self.config.data.setdefault("remote", {})["url"] = new_url
-                            self.config.save()
-                            print("[OK] Origin updated")
-                            
-                    except Exception as e:
-                        print(f"[ERROR] Spawn failed: {e}")
-                        print("Ensure you have SSH keys set up and 'scp' available.")
-                    continue
-
-                if user == "/adjustconfig":
-                    print("\n[FREELI CONFIG] Adjust Configuration")
-                    print(f"Current Config: {json.dumps(self.config.data, indent=2)}")
-                    key = input("Key (e.g. inference.temperature) > ").strip()
-                    if key:
-                        val = input(f"Value for '{key}' > ").strip()
-                        # Try to parse as json/number/bool
-                        try: val = json.loads(val)
-                        except: pass
-                        
-                        # Set nested key
-                        keys = key.split('.')
-                        curr = self.config.data
-                        for k in keys[:-1]:
-                            curr = curr.setdefault(k, {})
-                        curr[keys[-1]] = val
-                        
-                        self.config.save()
-                        print(f"[OK] Set {key} = {val}")
-                    continue
-
-                if user == "/addcmd":
-                    print("\n[FREELI MAKER] Create a new CLI command")
-                    name = input("Name > ").strip()
-                    if not name: continue
-                    desc = input("Describe what it does > ").strip()
-                    if not desc: continue
-                    
-                    print(f"[freeli] Generating command '{name}'...")
-                    prompt = f"""Write a Python script to: {desc}
-                    Requirements:
-                    - Self-contained
-                    - Uses standard libraries or requests/BeautifulSoup
-                    - Prints output to stdout
-                    
-                    Output ONLY the code inside ```python blocks."""
-                    
-                    # Generate code
-                    resp = self.agent_chat(prompt, use_remote)
-                    
-                    # Extract code
-                    code = ""
-                    if "```python" in resp:
-                        code = resp.split("```python")[1].split("```")[0].strip()
-                    elif "```" in resp:
-                        code = resp.split("```")[1].split("```")[0].strip()
+                if k_res.returncode == 0:
+                    api_key = k_res.stdout.strip()
+                    if len(api_key) > 10:
+                        self.config.data["remote"]["key"] = api_key
+                        print(f"{BLUE}[SUCCESS] API Key retrieved!{RESET}")
                     else:
-                        code = resp.strip()
-                        
+                        print(f"{PINK}[WARN] Key file found but empty/invalid.{RESET}")
+                else:
+                    print(f"{PINK}[WARN] Could not fetch api_key.txt via SSH.{RESET}")
+                    print(f"Error: {k_res.stderr}")
+            except Exception as e:
+                print(f"{PINK}[Error] SSH fetch failed: {e}{RESET}")
+
+            self.config.save()
+            print(f"\n{BLUE}[DONE] Connected to {name}!{RESET}")
+            print(f"Origin: {url}")
+
+        elif cmd == "/config":
+            print(json.dumps(self.config.data, indent=2))
+            
+        elif cmd.startswith("/addorigin"):
+            parts = user.split()
+            origin_input = parts[1] if len(parts) > 1 else ""
+            if not origin_input:
+                origin_input = input(f"Sovereign Origin (e.g. root@1.2.3.4) > ").strip()
+            
+            if origin_input:
+                # 1. Save host to SSH helper
+                self.config.data.setdefault("remote", {})["ssh_host"] = origin_input
+                
+                # 2. Derive URL
+                try:
+                    ip = origin_input.split("@")[-1] if "@" in origin_input else origin_input
+                    url = f"http://{ip}:8000"
+                    self.config.data.setdefault("remote", {})["url"] = url
+                    self.config.save()
+                    print(f"{BLUE}[OK] Origin saved: {url}{RESET}")
+                    print(f"{YELLOW}(Will auto-auth on first message){RESET}")
+                except Exception as e:
+                    print(f"[ERROR] Invalid origin format: {e}")
+
+        elif cmd == "/rotatekey":
+            remote = self.config.data.get("remote", {}).get("url", "")
+            if not remote:
+                 print(f"{PINK}[ERROR]{RESET} No remote origin configured.")
+                 return
+                 
+            host_ip = remote.split("//")[1].split(":")[0]
+            origin = f"root@{host_ip}" # Assumption: running as root
+            
+            print(f"{YELLOW}Rotating Sovereign Key on {origin}...{RESET}")
+            
+            try:
+                # 1. SSH command to kill wrapper, delete key, restart wrapper
+                remote_cmd = (
+                    "pkill -f gguf_wrapper.py; "
+                    "rm -f api_key.txt; "
+                    "screen -dmS freeli_wrapper bash -c 'while true; do python3 gguf_wrapper.py >> wrapper.log 2>&1; sleep 5; done'"
+                )
+                subprocess.run(f"ssh {origin} \"{remote_cmd}\"", shell=True)
+                
+                # 2. Wait for regeneration
+                print(f"{BLUE}Waiting for key regeneration...{RESET}")
+                time.sleep(5)
+                
+                # 3. Fetch new key
+                res = subprocess.run(f"ssh {origin} \"cat api_key.txt\"", shell=True, capture_output=True, text=True)
+                new_key = res.stdout.strip()
+                
+                if len(new_key) > 10:
+                    self.config.data["remote"]["key"] = new_key
+                    self.config.save()
+                    print(f"{BLUE}[SUCCESS]{RESET} Key rotated!")
+                    print(f"{PINK}New Key:{RESET} {new_key[:8]}...{new_key[-8:]}")
+                else:
+                    print(f"{PINK}[ERROR]{RESET} Failed to fetch new key.")
+                    
+            except Exception as e:
+                 print(f"{PINK}[ERROR]{RESET} Rotation failed: {e}")
+            
+        elif cmd == "/addmem":
+            mem = input("Memory > ").strip()
+            if mem:
+                (WORKSPACE / "memory.txt").write_text(mem + "\n", encoding="utf-8")
+                print("[OK] Memory saved")
+                
+        elif cmd == "/addkey":
+             print("[WARN] Deprecated. Use /addorigin or edit config directly.")
+
+        elif cmd == "/spawn":
+            print("\n[FREELI SPAWN] Provision Remote Inference Server")
+            host = input("SSH Host (e.g. root@1.2.3.4) > ").strip()
+            if host:
+                print(f"[freeli] Provisioning {host}...")
+                script_content = """#!/bin/bash
+set -e
+echo "--- Updating System ---"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq && apt-get install -y -qq build-essential git cmake wget screen python3-pip curl
+
+echo "--- Installing Python Libs ---"
+pip3 install httpx uvicorn fastapi --break-system-packages
+
+echo "--- Setting up Llama.cpp (CMake) ---"
+if [ ! -d "llama.cpp" ]; then
+    git clone https://github.com/ggerganov/llama.cpp
+    cd llama.cpp
+    cmake -B build -DGGML_NATIVE=OFF
+    cmake --build build --config Release -j$(nproc)
+    cd ..
+fi
+
+echo "--- Downloading Model (Phi-2) ---"
+mkdir -p models
+if [ ! -f "models/phi-2.Q4_K_M.gguf" ]; then
+    wget -q --show-progress -O models/phi-2.Q4_K_M.gguf https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf
+fi
+
+echo "--- Starting Server ---"
+pkill -f llama-server || true
+screen -dmS freeli ./llama.cpp/build/bin/llama-server -m models/phi-2.Q4_K_M.gguf -c 2048 --host 0.0.0.0 --port 8125
+
+echo "SUCCESS: Server running on port 8125"
+"""
+                try:
+                    prov_path = WORKSPACE / "provision.sh"
+                    prov_path.write_text(script_content, encoding='utf-8')
+                    tgt = f"{host}:/tmp/provision_freeli.sh"
+                    print(f"• Uploading script to {tgt}...")
+                    subprocess.run(["scp", str(prov_path), tgt], check=True)
+                    print(f"• Executing on {host}...")
+                    subprocess.run(["ssh", host, "chmod +x /tmp/provision_freeli.sh && /tmp/provision_freeli.sh"], check=True)
+                    ip = host.split("@")[1] if "@" in host else host
+                    new_url = f"http://{ip}:8125"
+                    print(f"\n[OK] Remote server provisioned at {new_url}")
+                    if input("Set as current origin? (y/n) > ").lower().startswith("y"):
+                        self.config.data.setdefault("remote", {})["url"] = new_url
+                        self.config.save()
+                        print("[OK] Origin updated")
+                except Exception as e:
+                    print(f"[ERROR] Spawn failed: {e}")
+
+        elif cmd == "/addcmd":
+            print("\n[FREELI MAKER] Create a new CLI command")
+            name = input("Name > ").strip()
+            if name:
+                desc = input("Describe what it does > ").strip()
+                if desc:
+                    print(f"[freeli] Generating command '{name}'...")
+                    prompt = f"Write a Python script to: {desc}\nRequirements:\n- Self-contained\n- Prints to stdout\nOutput ONLY the code inside ```python blocks."
+                    resp = self.agent_chat(prompt, True)
+                    code = ""
+                    if "```python" in resp: code = resp.split("```python")[1].split("```")[0].strip()
+                    elif "```" in resp: code = resp.split("```")[1].split("```")[0].strip()
+                    else: code = resp.strip()
+                    
                     if code:
-                        # Save to bin
                         script_path = BIN_DIR / f"{name}.py"
                         cmd_path = BIN_DIR / f"{name}.cmd"
-                        
                         script_path.write_text(code, encoding='utf-8')
                         cmd_path.write_text(f'@python "{script_path}" %*', encoding='utf-8')
-                        
                         print(f"[OK] Command created: {name}")
-                        print(f"Run it with: {name}")
                     else:
                         print("[ERROR] Failed to generate code")
-                    continue
 
-                if user == "/addtool":
-                    print("\n[FREELI MAKER] Create a new Agent Tool")
-                    name = input("Tool Name > ").strip()
-                    if not name: continue
-                    desc = input("Describe functionality > ").strip()
-                    if not desc: continue
-                    
-                    print(f"[freeli] Implementing tool '{name}'...")
-                    prompt = f"""Write a Python method for the 'Tools' class to: {desc}
-                    Method signature: @staticmethod def {name}(args: str) -> str:
-                    
-                    Requirements:
-                    - Error handling (try/except) returning string error
-                    - Return string output
-                    - Use type hinting
-                    
-                    Output ONLY the python code for the method inside ```python blocks."""
-                    
-                    resp = self.agent_chat(prompt, use_remote)
-                    
-                    code = ""
-                    if "```python" in resp:
-                        code = resp.split("```python")[1].split("```")[0].strip()
-                    elif "```" in resp:
-                        code = resp.split("```")[1].split("```")[0].strip()
-                    else:
-                        code = resp
-                    
-                    if code:
-                        # Append to this file!
-                        my_path = Path(__file__)
-                        content = my_path.read_text(encoding='utf-8')
-                        
-                        # Find end of Tools class
-                        # We'll look for "class Config:" as the marker after Tools
-                        if "class Config:" in content:
-                            parts = content.split("class Config:")
-                            
-                            # Indent the code
-                            indented_code = "\n    " + code.replace("\n", "\n    ") + "\n\n"
-                            
-                            new_content = parts[0] + indented_code + "class Config:" + parts[1]
-                            
-                            # Also need to update System Prompt to include this tool
-                            if 'AGENT_SYSTEM_PROMPT = """' in new_content:
-                                tool_def = f'\n<tool name="{name}">{desc}</tool>\n'
-                                new_content = new_content.replace('AGENT_SYSTEM_PROMPT = """', 'AGENT_SYSTEM_PROMPT = """' + tool_def)
-                            
-                            my_path.write_text(new_content, encoding='utf-8')
-                            print(f"[OK] Tool '{name}' added! Please restart Freeli to use it.")
-                            break # Exit to restart
-                        else:
-                            print("[ERROR] Could not find insertion point in source code")
-                    else:
-                        print("[ERROR] Failed to generate tool code")
-                    continue
+        elif cmd == "/addtool":
+             print("\n[FREELI MAKER] Create a new Agent Tool")
+             name = input("Tool Name > ").strip()
+             if name:
+                 desc = input("Describe functionality > ").strip()
+                 if desc:
+                     print(f"[freeli] Implementing tool '{name}'...")
+                     prompt = f"Write a Python method for the 'Tools' class to: {desc}\nSignature: @staticmethod def {name}(args: str) -> str:\nOutput ONLY python code inside ```python blocks."
+                     resp = self.agent_chat(prompt, True)
+                     code = ""
+                     if "```python" in resp: code = resp.split("```python")[1].split("```")[0].strip()
+                     elif "```" in resp: code = resp.split("```")[1].split("```")[0].strip()
+                     else: code = resp
+                     
+                     if code:
+                         my_path = Path(__file__)
+                         c = my_path.read_text(encoding='utf-8')
+                         if "class Config:" in c:
+                             parts = c.split("class Config:")
+                             indented = "\n    " + code.replace("\n", "\n    ") + "\n\n"
+                             new_c = parts[0] + indented + "class Config:" + parts[1]
+                             if 'AGENT_SYSTEM_PROMPT = """' in new_c:
+                                 tool_def = f'\n<tool name="{name}">{desc}</tool>\n'
+                                 new_c = new_c.replace('AGENT_SYSTEM_PROMPT = """', 'AGENT_SYSTEM_PROMPT = """' + tool_def)
+                             my_path.write_text(new_c, encoding='utf-8')
+                             print(f"[OK] Tool '{name}' added! Restart Freeli.")
+                             sys.exit(0)
+                         else: print("[ERROR] Could not insert tool")
+                     else: print("[ERROR] Failed to generate tool code")
 
-                if user == "/models":
-                    for m in find_models(): print(f"  • {m}")
-                    continue
-                if user == "/ide":
-                    print("\n[FREELI IDE] Starting FreeAide Server...")
-                    print("Open http://127.0.0.1:9999 in your browser")
-                    try:
-                        subprocess.run(
-                            [sys.executable, str(FREELI_HOME / "ide" / "main.py")],
-                            cwd=str(FREELI_HOME / "ide")
-                        )
-                    except KeyboardInterrupt:
-                        print("\n[FREELI IDE] Stopped")
-                    continue
-                if user == "/serve":
-                    self.serve()
-                    continue
-                if user == "/remote":
-                    use_remote = True
-                    print(f"[freeli] Remote mode: {remote}")
-                    continue
-                if user == "/local":
-                    use_remote = False
-                    print("[freeli] Local mode")
-                    continue
-                
-                print("\n[freeli] thinking...")
-                resp = self.agent_chat(user, use_remote)
-                print(f"\n[freeli] {resp}")
-            except KeyboardInterrupt:
-                print("\n/quit to exit")
-            except EOFError:
-                break
+        elif cmd == "/load":
+            parts = user.split()
+            if len(parts) < 2:
+                print("Usage: /load <path/to/model.gguf> or /load <index>")
+                models = find_models()
+                for i, m in enumerate(models):
+                    print(f"  [{i}] {m.name}")
+                return
+
+            arg = parts[1]
+            try:
+                idx = int(arg)
+                models = find_models()
+                if 0 <= idx < len(models):
+                    new_model = str(models[idx])
+                    if not isinstance(self.config.data.get("model"), dict):
+                        self.config.data["model"] = {}
+                    self.config.data["model"]["path"] = new_model
+                    self.config.save()
+                    print(f"[OK] Loaded model: {Path(new_model).name}")
+                else:
+                    print(f"[ERROR] Invalid index. Max is {len(models)-1}")
+            except ValueError:
+                p = Path(arg)
+                if p.exists():
+                    if not isinstance(self.config.data.get("model"), dict):
+                        self.config.data["model"] = {}
+                    self.config.data["model"]["path"] = str(p)
+                    self.config.save()
+                    print(f"[OK] Loaded model: {p.name}")
+                else:
+                    print(f"[ERROR] File not found: {arg}")
+
+        elif cmd == "/models":
+            models = find_models()
+            for i, m in enumerate(models): 
+                print(f"  [{i}] {m}")
+
+        elif cmd == "/ide":
+            print("\n[FREELI IDE] Starting FreeAide Server...")
+            print("Open http://127.0.0.1:9999")
+            try:
+                subprocess.run([sys.executable, str(FREELI_HOME / "ide" / "main.py")], cwd=str(FREELI_HOME / "ide"))
+            except KeyboardInterrupt: print("\nStopped")
+
+        elif cmd == "/serve":
+            self.serve()
+
+        elif cmd == "/remote":
+             print("[INFO] Switched to remote mode (effective next turn)")
+        
+        elif cmd == "/local":
+             print("[INFO] Switched to local mode (effective next turn)")
+             
+        else:
+            print(f"Unknown command: {cmd}")
 
 
 
 def main():
     p = argparse.ArgumentParser(description="Freeli - Sovereign AI Agent")
-    p.add_argument("cmd", nargs="?", default="repl", choices=["repl", "serve", "chat", "config", "models", "ide"])
+    p.add_argument("cmd", nargs="?", default="repl", choices=["repl", "serve", "chat", "config", "models", "ide", "hostinger"])
     p.add_argument("-m", "--message")
     p.add_argument("-r", "--remote", action="store_true", default=True)
     p.add_argument("-l", "--local", action="store_true")
     p.add_argument("--ide", action="store_true", help="Launch FreeAide immediately")
     p.add_argument("--port", type=int)
+    p.add_argument("hostinger_token", nargs="?", help="API token for /hostinger command") # Add optional token arg
     args = p.parse_args()
     
     f = Freeli()
@@ -1129,7 +1309,15 @@ def main():
             print("\n[FREELI IDE] Stopped")
         return
 
-    if args.cmd == "serve":
+    if args.cmd == "hostinger":
+        token = args.hostinger_token or f.config.data.get("hostinger_token", "")
+        if token:
+            f.handle_command(f"/hostinger {token}")
+        else:
+            print("Token required. Pass it as arg or set in config.")
+            return
+            
+    elif args.cmd == "serve":
         f.serve()
     elif args.cmd == "config":
         print(json.dumps(f.config.data, indent=2))

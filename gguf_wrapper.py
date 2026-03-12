@@ -91,8 +91,7 @@ async def startup_event():
             "-ngl", "99",
             "-b", "512",
             "--port", str(LLAMA_PORT),
-            "--host", LLAMA_HOST,
-            "--nobrowser"
+            "--host", LLAMA_HOST
         ]
         
         logger.info(f"Starting: {str(cmd)}")
@@ -145,8 +144,7 @@ async def load_model(req: LoadModelRequest, key: str = Security(verify_api_key))
         "-ngl", str(req.n_gpu),
         "-b", str(req.batch),
         "--port", str(LLAMA_PORT),
-        "--host", LLAMA_HOST,
-        "--nobrowser"
+        "--host", LLAMA_HOST
     ]
     
     logger.info(f"Starting: {str(cmd)}")
