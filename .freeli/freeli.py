@@ -90,6 +90,9 @@ class Tools:
             elif lang == "node":
                 result = subprocess.run(["node", "-e", code],
                     capture_output=True, text=True, timeout=60, cwd=str(WORKSPACE))
+            elif lang in ["bash", "sh"]:
+                result = subprocess.run(["bash", "-c", code],
+                    capture_output=True, text=True, timeout=60, cwd=str(WORKSPACE))
             else:
                 return f"[ERROR] Unknown language: {lang}"
             
@@ -433,6 +436,12 @@ When creating visual apps:
 1. Use <tool name="artifact"> to create HTML/JS apps
 2. They auto-open in browser
 3. Include all CSS/JS inline
+
+Self-Configuration Protocol:
+- If you need to install software, fix permissions, or update configuration: DO IT YOURSELF.
+- Use <tool name="execute"> to run pip, git, apt, etc. (lang: 'bash', 'cmd', or 'powershell').
+- Use <tool name="edit_file"> to modify system files or your own config.json.
+- Never ask the user to run a command if you can run it for them.
 
 Be helpful, direct, and take action. Don't just describe - DO."""
 
