@@ -13,9 +13,13 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 if ! command -v ssh &> /dev/null; then
-    echo "SSH client is missing. Installing openssh..."
-    if command -v pkg &> /dev/null; then pkg install openssh termux-api git wget -y; fi
-    if command -v apt &> /dev/null; then sudo apt update && sudo apt install openssh-client git wget -y; fi
+    if command -v pkg &> /dev/null; then 
+        echo "Detected Termux/Android."
+        pkg update -y && pkg install openssh termux-api git wget python -y
+    elif command -v apt &> /dev/null; then 
+        echo "Detected Debian/Ubuntu."
+        sudo apt update && sudo apt install openssh-client git wget python3 -y
+    fi
 fi
 
 # 2. Setup Directories
