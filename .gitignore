@@ -15,6 +15,9 @@
 !/agent.py
 !/README.md
 !/.gitignore
+!/install.sh
+!/termux-install.sh
+!/mobile.sh
 
 # Ignore binaries and large files
 *.exe
