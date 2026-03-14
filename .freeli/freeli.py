@@ -783,6 +783,18 @@ class Freeli:
         print(f"{PINK}Cmds:{RESET}  /spawn /addcmd /addtool /config /addorigin /addmem /ide /quit\n")
         print(f"{mode_str}\n")
         
+        # Auto-Auth Check on Launch
+        if use_remote:
+             print(f"{BLUE}[Auto-Auth] Verifying connection to Sovereign Stack...{RESET}")
+             try:
+                 key = self._ensure_remote_key()
+                 if key:
+                     print(f"{BLUE}[OK] Secure Link Established.{RESET}")
+                 else:
+                     print(f"{PINK}[WARN] Could not fetch key automatically. Check SSH.{RESET}")
+             except Exception as e:
+                 print(f"{PINK}[ERROR] Connection check failed: {e}{RESET}")
+
         # Try importing prompt_toolkit for better TUI
         try:
             from prompt_toolkit import PromptSession
