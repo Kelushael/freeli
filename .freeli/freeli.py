@@ -665,7 +665,7 @@ class Freeli:
         # Auto-auth before chatting
         self._ensure_remote_key()
         
-        url = url or self.config.get("remote.url", "http://187.77.208.28:8125")
+        url = url or self.config.get("remote.url", "http://187.77.208.28:8000")
         key = self.config.get("remote.key")
         
         data = json.dumps({
@@ -689,11 +689,13 @@ class Freeli:
             full_content = ""
             full_reasoning = ""
             
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            # Increase timeout to 15 minutes (900s) for large models/logic
+            with urllib.request.urlopen(req, timeout=900) as resp:
                 print(f"{self.config.data.get('colors', {}).get('YELLOW', '')}Thinking...{self.config.data.get('colors', {}).get('RESET', '')}", end="", flush=True)
                 
                 for line in resp:
                     line = line.decode('utf-8').strip()
+                    if not line: continue
                     if line.startswith("data: "):
                         json_str = line[6:]
                         if json_str == "[DONE]": break
@@ -707,7 +709,7 @@ class Freeli:
                                 print(content, end="", flush=True)
                                 full_content += content
                             if reasoning:
-                                full_reasoning += reasoning # Keep reasoning internal/hidden
+                                full_reasoning += reasoning
                         except: pass
             
             print() # Newline after stream
