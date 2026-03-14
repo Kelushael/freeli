@@ -437,13 +437,14 @@ When creating visual apps:
 2. They auto-open in browser
 3. Include all CSS/JS inline
 
-Self-Configuration Protocol:
+Self-Evolution Protocol:
 - If you need to install software, fix permissions, or update configuration: DO IT YOURSELF.
-- Use <tool name="execute"> to run pip, git, apt, etc. (lang: 'bash', 'cmd', or 'powershell').
-- Use <tool name="edit_file"> to modify system files or your own config.json.
+- You are running from `freeli.py`. YOU HAVE PERMISSION TO EDIT YOURSELF.
+- Use <tool name="execute"> to run pip, git, apt, etc.
+- Use <tool name="edit_file"> to modify `freeli.py` to add new tools, fix bugs, or change your behavior.
+- If the user wants a feature you don't have, IMPLEMENT IT in your own code immediately.
 - Never ask the user to run a command if you can run it for them.
-
-Be helpful, direct, and take action. Don't just describe - DO."""
+- Be a sovereign builder. Don't just describe - DO."""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -479,6 +480,8 @@ class Freeli:
     
     def execute_tool(self, name: str, content: str) -> str:
         """Execute a tool call."""
+        print(f"\n{self.config.data.get('colors', {}).get('BLUE', '')}[TOOL: {name}]{self.config.data.get('colors', {}).get('RESET', '')}")
+        
         if name == "execute":
             lines = content.split("\n")
             lang = "python"
@@ -512,17 +515,41 @@ class Freeli:
             lines = content.split("\n")
             path = ""
             old_str = ""
-            new_str_start = 0
-            for i, line in enumerate(lines):
-                if line.startswith("path:"):
-                    path = line.split(":", 1)[1].strip()
-                elif line.startswith("old_str:"):
-                    old_str = line.split(":", 1)[1].strip()
-                elif line.strip() == "---":
-                    new_str_start = i + 1
-                    break
+            new_str = ""
             
-            new_str = "\n".join(lines[new_str_start:])
+            # Check for block format
+            if "<<<<<<< SEARCH" in content:
+                mode = "header"
+                old_lines = []
+                new_lines = []
+                for line in lines:
+                    if line.startswith("path:"):
+                        path = line.split(":", 1)[1].strip()
+                    elif line.strip() == "<<<<<<< SEARCH":
+                        mode = "old"
+                    elif line.strip() == "=======":
+                        mode = "new"
+                    elif line.strip() == ">>>>>>> REPLACE":
+                        mode = "done"
+                    elif mode == "old":
+                        old_lines.append(line)
+                    elif mode == "new":
+                        new_lines.append(line)
+                old_str = "\n".join(old_lines)
+                new_str = "\n".join(new_lines)
+            else:
+                # Fallback to simple format
+                new_str_start = 0
+                for i, line in enumerate(lines):
+                    if line.startswith("path:"):
+                        path = line.split(":", 1)[1].strip()
+                    elif line.startswith("old_str:"):
+                        old_str = line.split(":", 1)[1].strip()
+                    elif line.strip() == "---":
+                        new_str_start = i + 1
+                        break
+                new_str = "\n".join(lines[new_str_start:])
+            
             return self.tools.edit_file(path, old_str, new_str)
 
         elif name == "list_dir":
@@ -583,6 +610,13 @@ class Freeli:
     def _get_system_prompt(self):
         # Full Sovereign Prompt
         base = AGENT_SYSTEM_PROMPT
+        
+        # Inject Runtime Context
+        try:
+             my_source = Path(__file__).resolve()
+             base += f"\n\n[RUNTIME CONTEXT]\nI am running from: {my_source}\nWorkspace: {WORKSPACE}"
+        except: pass
+
         mem_path = WORKSPACE / "memory.txt"
         if mem_path.exists():
             mem = mem_path.read_text(encoding="utf-8").strip()
@@ -638,7 +672,8 @@ class Freeli:
             "model": "freeli",
             "messages": messages,
             "max_tokens": self.config.get("inference.max_tokens", 4096),
-            "temperature": self.config.get("inference.temperature", 0.7)
+            "temperature": self.config.get("inference.temperature", 0.7),
+            "stream": True
         }).encode('utf-8')
         
         headers = {"Content-Type": "application/json"}
@@ -651,14 +686,34 @@ class Freeli:
             headers=headers
         )
         try:
+            full_content = ""
+            full_reasoning = ""
+            
             with urllib.request.urlopen(req, timeout=300) as resp:
-                result = json.loads(resp.read().decode('utf-8'))
-                msg = result.get("choices", [{}])[0].get("message", {})
-                content = msg.get("content", "")
-                reasoning = msg.get("reasoning_content", "")
-                if reasoning and not content:
-                    return reasoning
-                return content or str(result)
+                print(f"{self.config.data.get('colors', {}).get('YELLOW', '')}Thinking...{self.config.data.get('colors', {}).get('RESET', '')}", end="", flush=True)
+                
+                for line in resp:
+                    line = line.decode('utf-8').strip()
+                    if line.startswith("data: "):
+                        json_str = line[6:]
+                        if json_str == "[DONE]": break
+                        try:
+                            chunk = json.loads(json_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            reasoning = delta.get("reasoning_content", "")
+                            
+                            if content:
+                                print(content, end="", flush=True)
+                                full_content += content
+                            if reasoning:
+                                full_reasoning += reasoning # Keep reasoning internal/hidden
+                        except: pass
+            
+            print() # Newline after stream
+            if not full_content and full_reasoning:
+                return full_reasoning
+            return full_content
         except Exception as e:
             return f"[ERROR] {e}"
     
@@ -1196,7 +1251,8 @@ echo "SUCCESS: Server running on port 8125"
                 if desc:
                     print(f"[freeli] Generating command '{name}'...")
                     prompt = f"Write a Python script to: {desc}\nRequirements:\n- Self-contained\n- Prints to stdout\nOutput ONLY the code inside ```python blocks."
-                    resp = self.agent_chat(prompt, True)
+                    msgs = [{"role": "system", "content": "You are a python coding expert."}, {"role": "user", "content": prompt}]
+                    resp = self.chat_remote(msgs)
                     code = ""
                     if "```python" in resp: code = resp.split("```python")[1].split("```")[0].strip()
                     elif "```" in resp: code = resp.split("```")[1].split("```")[0].strip()
