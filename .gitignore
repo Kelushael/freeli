@@ -18,6 +18,7 @@
 !/install.sh
 !/termux-install.sh
 !/mobile.sh
+!/sky
 
 # Ignore binaries and large files
 *.exe

@@ -1,0 +1,92 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# sky — one word. you're in.
+# tunnels to VPS, forwards sky-feed to your phone, opens browser
+#
+# install: put this in Termux PATH
+#   curl -L https://raw.githubusercontent.com/Kelushael/freeli/master/sky -o ~/.local/bin/sky && chmod +x ~/.local/bin/sky
+
+VPS="root@axismundi.fun"
+VPS_PORT=9090
+LOCAL_PORT=8090
+SSH_KEY="$HOME/.ssh/id_ed25519"
+
+LIME="\033[38;2;57;255;100m"; CYAN="\033[38;2;0;220;255m"
+GRAY="\033[38;2;85;85;105m";  RED="\033[38;2;255;70;70m"
+RS="\033[0m"; BOLD="\033[1m"
+
+clear
+echo ""
+echo -e "${LIME}${BOLD}  ⬡ SKY${RS}  ${GRAY}connecting...${RS}"
+echo ""
+
+# ── check SSH key ─────────────────────────────────────────────────────────────
+if [ ! -f "$SSH_KEY" ]; then
+    echo -e "  ${RED}✗${RS}  no SSH key — run: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''"
+    exit 1
+fi
+
+# ── check VPS tunnel is live ──────────────────────────────────────────────────
+TUNNEL_UP=$(ssh -i "$SSH_KEY" \
+    -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 \
+    "$VPS" \
+    "ss -tlnp | grep -c ':${VPS_PORT}'" 2>/dev/null)
+
+if [ "$TUNNEL_UP" = "0" ] || [ -z "$TUNNEL_UP" ]; then
+    echo -e "  ${RED}✗${RS}  home tunnel not up"
+    echo -e "  ${GRAY}run on your home machine:${RS}  ${CYAN}sky-home${RS}"
+    echo ""
+    echo -e "  ${GRAY}waiting for tunnel (ctrl+c to quit)...${RS}"
+    for i in $(seq 1 30); do
+        sleep 2
+        TUNNEL_UP=$(ssh -i "$SSH_KEY" \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=5 \
+            "$VPS" \
+            "ss -tlnp | grep -c ':${VPS_PORT}'" 2>/dev/null)
+        [ "$TUNNEL_UP" != "0" ] && [ -n "$TUNNEL_UP" ] && break
+        echo -ne "  ${GRAY}.${RS}"
+    done
+    echo ""
+    if [ "$TUNNEL_UP" = "0" ] || [ -z "$TUNNEL_UP" ]; then
+        echo -e "  ${RED}✗${RS}  tunnel never came up — is sky-home running at home?"
+        exit 1
+    fi
+fi
+
+echo -e "  ${LIME}✓${RS}  home tunnel live on VPS:$VPS_PORT"
+
+# ── forward VPS:9090 → phone localhost:8090 ───────────────────────────────────
+# kill any existing forward
+pkill -f "ssh.*${LOCAL_PORT}:localhost:${VPS_PORT}" 2>/dev/null
+
+ssh -i "$SSH_KEY" \
+    -o StrictHostKeyChecking=no \
+    -o ServerAliveInterval=20 \
+    -L "${LOCAL_PORT}:localhost:${VPS_PORT}" \
+    "$VPS" -N &
+FWD_PID=$!
+sleep 1
+
+if ! kill -0 $FWD_PID 2>/dev/null; then
+    echo -e "  ${RED}✗${RS}  port forward failed"
+    exit 1
+fi
+
+echo -e "  ${LIME}✓${RS}  forwarded → localhost:$LOCAL_PORT"
+echo ""
+echo -e "${LIME}${BOLD}  ⬡ READY${RS}"
+echo ""
+echo -e "  ${CYAN}open in browser:${RS}"
+echo -e "  ${LIME}  http://localhost:$LOCAL_PORT${RS}"
+echo ""
+echo -e "  ${GRAY}or run:  termux-open-url http://localhost:$LOCAL_PORT${RS}"
+echo -e "  ${GRAY}ctrl+c disconnects${RS}"
+echo ""
+
+# try to auto-open browser
+termux-open-url "http://localhost:$LOCAL_PORT" 2>/dev/null &
+
+# keep alive
+trap "kill $FWD_PID 2>/dev/null; echo -e '\n  ${GRAY}disconnected${RS}'" EXIT INT TERM
+wait $FWD_PID
