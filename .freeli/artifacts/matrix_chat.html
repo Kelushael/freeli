@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FREELI :: SOVEREIGN MATRIX</title>
+    <style>
+        :root {
+            --matrix-green: #0F0;
+            --matrix-dark: #000;
+            --matrix-dim: #003300;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--matrix-dark);
+            color: var(--matrix-green);
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            opacity: 0.15;
+        }
+        #ui-container {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+            background: rgba(0, 0, 0, 0.7);
+        }
+        #header {
+            border-bottom: 1px solid var(--matrix-green);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            text-shadow: 0 0 5px var(--matrix-green);
+        }
+        .status {
+            font-size: 0.8rem;
+            animation: blink 2s infinite;
+        }
+        #chat-history {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            padding-right: 10px;
+            scroll-behavior: smooth;
+        }
+        .message {
+            margin-bottom: 15px;
+            line-height: 1.4;
+            opacity: 0;
+            animation: fadeIn 0.3s forwards;
+        }
+        .user-msg {
+            color: #fff;
+            text-align: right;
+        }
+        .user-msg::before {
+            content: "> ";
+            color: var(--matrix-green);
+        }
+        .ai-msg {
+            color: var(--matrix-green);
+            border-left: 2px solid var(--matrix-dim);
+            padding-left: 10px;
+            white-space: pre-wrap;
+        }
+        #input-area {
+            display: flex;
+            border-top: 1px solid var(--matrix-dim);
+            padding-top: 10px;
+        }
+        textarea {
+            flex-grow: 1;
+            background: rgba(0, 20, 0, 0.5);
+            border: 1px solid var(--matrix-dim);
+            color: var(--matrix-green);
+            padding: 10px;
+            font-family: inherit;
+            resize: none;
+            height: 50px;
+            outline: none;
+        }
+        textarea:focus {
+            border-color: var(--matrix-green);
+            box-shadow: 0 0 10px var(--matrix-dim);
+        }
+        button {
+            background: var(--matrix-dim);
+            color: var(--matrix-green);
+            border: 1px solid var(--matrix-green);
+            padding: 0 20px;
+            margin-left: 10px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background: var(--matrix-green);
+            color: var(--matrix-dark);
+            box-shadow: 0 0 10px var(--matrix-green);
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #001100; }
+        ::-webkit-scrollbar-thumb { background: #004400; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--matrix-green); }
+
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @keyframes fadeIn { to { opacity: 1; } }
+        
+        /* Code blocks */
+        pre {
+            background: #001100;
+            border: 1px solid #004400;
+            padding: 10px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"><canvas id="matrix"></canvas></div>
+    
+    <div id="ui-container">
+        <div id="header">
+            <div class="title">FREELI // SOVEREIGN</div>
+            <div class="status" id="connection-status">CONNECTED: 187.77.208.28</div>
+        </div>
+        
+        <div id="chat-history">
+            <div class="message ai-msg">System online. Secure link established. What is your command?</div>
+        </div>
+        
+        <div id="input-area">
+            <textarea id="user-input" placeholder="Enter command..." onkeydown="if(event.keyCode===13 && !event.shiftKey){event.preventDefault(); sendMsg();}"></textarea>
+            <button onclick="sendMsg()">EXECUTE</button>
+        </div>
+    </div>
+
+    <script>
+        // --- PRO MATRIX RAIN EFFECT ---
+        const canvas = document.getElementById('matrix');
+        const ctx = canvas.getContext('2d');
+        
+        let width, height, columns, rows;
+        let drops = [];
+        
+        function resizeCanvas() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            columns = Math.ceil(width / fontSize);
+            rows = Math.ceil(height / fontSize);
+            
+            // Re-init drops if size increases, preserving old ones if possible
+            const newDrops = [];
+            for(let x = 0; x < columns; x++) {
+                newDrops[x] = drops[x] || {
+                    y: Math.random() * rows,
+                    speed: Math.random() * 0.5 + 0.25
+                };
+            }
+            drops = newDrops;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Authentic Matrix characters (Katakana + Latin + nums)
+        const katakana = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ';
+        const latin = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        const nums = '0123456789';
+        const alphabet = katakana + latin + nums;
+
+        const fontSize = 14;
+
+        function drawMatrix() {
+            // Fade out effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.fillRect(0, 0, width, height);
+            
+            ctx.font = fontSize + 'px monospace';
+            
+            for(let i = 0; i < drops.length; i++) {
+                const drop = drops[i];
+                
+                // Pick a character
+                const char = alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+                
+                // 1. Draw the "Head" (White) - Current position
+                ctx.fillStyle = '#FFF'; 
+                ctx.fillText(char, i * fontSize, drop.y * fontSize);
+                
+                // 2. Draw the "Body" (Green) - Previous position (approx)
+                // This reinforces the green color before it fades
+                ctx.fillStyle = '#0F0';
+                ctx.fillText(char, i * fontSize, (drop.y - drop.speed*2) * fontSize);
+
+                // Move drop
+                drop.y += drop.speed;
+
+                // Reset to top
+                if(drop.y * fontSize > height && Math.random() > 0.975) {
+                    drop.y = 0;
+                    drop.speed = Math.random() * 0.5 + 0.25; 
+                }
+            }
+        }
+        
+        // Animation Loop
+        function animate() {
+            drawMatrix();
+            requestAnimationFrame(animate);
+        }
+        animate();
+
+
+        // --- CHAT LOGIC ---
+        const history = document.getElementById('chat-history');
+        const input = document.getElementById('user-input');
+        const status = document.getElementById('connection-status');
+        
+        async function sendMsg() {
+            const txt = input.value.trim();
+            if(!txt) return;
+            
+            // Add User Msg
+            addMessage(txt, 'user-msg');
+            input.value = '';
+            
+            // Add AI Placeholder
+            const aiDiv = addMessage('Thinking...', 'ai-msg');
+            status.innerText = "TRANSMITTING...";
+            
+            try {
+                // Call local proxy which handles auth and CORS
+                const resp = await fetch("/chat", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        model: "freeli",
+                        messages: [{role: "user", content: txt}],
+                        stream: false // Simple non-stream for now
+                    })
+                });
+                
+                if(!resp.ok) throw new Error("Server Error: " + resp.status);
+                
+                const data = await resp.json();
+                const reply = data.choices[0].message.content;
+                
+                aiDiv.innerHTML = "";
+                status.innerText = "CONNECTED: 187.77.208.28";
+                typeText(aiDiv, reply);
+                
+            } catch(e) {
+                aiDiv.innerText = "Error: " + e.message;
+                status.innerText = "LINK FAILED";
+            }
+        }
+
+        function addMessage(text, className) {
+            const div = document.createElement('div');
+            div.className = 'message ' + className;
+            div.innerText = text;
+            history.appendChild(div);
+            history.scrollTop = history.scrollHeight;
+            return div;
+        }
+        
+        function typeText(element, text, index=0) {
+            if(index < text.length) {
+                element.innerHTML += text.charAt(index);
+                history.scrollTop = history.scrollHeight;
+                setTimeout(() => typeText(element, text, index+1), 20);
+            }
+        }
+    </script>
+</body>
+</html>
